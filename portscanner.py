@@ -3,12 +3,16 @@ import threading
 import sys
 import time
 import platform
+import subprocess
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import argparse
 import json
 import csv
 from typing import List, Dict, Optional
+import colorama
+from colorama import Fore, Back, Style
+from tqdm import tqdm  # Added tqdm for progress bar
 
 class PortScanner:
     """
@@ -170,8 +174,7 @@ class PortScanner:
                     self.open_ports.append(port)
                     self.port_info[port] = port_info
 
-                # Print result to console
-                print(f"Port {port}: Open ({service})")
+                # Return the port info for the progress bar to handle display
                 return port_info
 
             sock.close()
@@ -235,21 +238,26 @@ class PortScanner:
         # Create a list of all ports in the range
         ports = list(range(self.start_port, self.end_port + 1))
         
-        # Use ThreadPoolExecutor for parallel scanning
+        # Use ThreadPoolExecutor for parallel scanning with progress bar
         with ThreadPoolExecutor(max_workers=max_threads) as executor:
-            # Submit all port scanning tasks
+            # Submit all port scanning tasks with progress tracking
             future_to_port = {executor.submit(self.scan_single_port, port): port for port in ports}
             
-            # Process completed tasks
-            for future in as_completed(future_to_port):
-                try:
-                    result = future.result()
-                    if result:
-                        # The result is already stored in self.open_ports and self.port_info
-                        pass  # Already handled in scan_single_port
-                except Exception as e:
-                    # Handle any exceptions during thread execution
-                    print(f"Error scanning port {future_to_port[future]}: {e}")
+            # Create progress bar and update it during scan
+            with tqdm(total=len(ports), desc="Scanning Ports", unit="port") as pbar:
+                # Process completed tasks
+                for future in as_completed(future_to_port):
+                    try:
+                        result = future.result()
+                        if result:
+                            # The result is already stored in self.open_ports and self.port_info
+                            pass  # Already handled in scan_single_port
+                    except Exception as e:
+                        # Handle any exceptions during thread execution
+                        print(f"Error scanning port {future_to_port[future]}: {e}")
+                    
+                    # Update progress bar after each completed task
+                    pbar.update(1)
         
         return self.open_ports
 
@@ -266,7 +274,20 @@ class PortScanner:
             print("\nOpen ports:")
             for port in sorted(self.open_ports):
                 service = self.port_info[port]['service']
-                print(f"  {port} ({service})")
+                
+                # Color code different services
+                if service == "SSH":
+                    service_color = Fore.CYAN
+                elif service in ["HTTP", "HTTPS"]:
+                    service_color = Fore.GREEN
+                elif service == "FTP":
+                    service_color = Fore.MAGENTA
+                elif service == "RDP":
+                    service_color = Fore.BLUE
+                else:
+                    service_color = Fore.WHITE
+                    
+                print(f"  {Fore.YELLOW}{port} ({service_color}{service}{Style.RESET_ALL})")
         else:
             print("\nNo open ports found.")
 
@@ -320,7 +341,9 @@ class PortScanner:
                     
                     if result == 0:
                         active_hosts.append(test_ip)
-                        print(f"Active host found: {test_ip}")
+                        print(f"Active host found: {Fore.GREEN}{test_ip}{Style.RESET_ALL}")
+                    else:
+                        print(f"Host {Fore.RED}{test_ip}{Style.RESET_ALL} is not responding")
                 except:
                     continue
                     
@@ -336,6 +359,9 @@ def main():
     This function handles user input, validates parameters, and orchestrates
     the scanning process with appropriate error handling.
     """
+    # Initialize colorama for cross-platform colored output
+    colorama.init()
+    
     # Create argument parser for command line interface
     parser = argparse.ArgumentParser(
         description="Port Scanner - Scan ports on a target host with threading",
@@ -427,13 +453,28 @@ Note: This tool is intended for educational purposes and authorized security tes
             print(f"Discovered {len(host_info)} hosts:")
             
             for host, info in host_info.items():
-                print(f"  {host}:")
+                print(f"  {Fore.YELLOW}{host}{Style.RESET_ALL}:")
                 if 'error' in info:
-                    print(f"    Error: {info['error']}")
+                    print(f"    {Fore.RED}Error: {info['error']}{Style.RESET_ALL}")
                 elif 'open_ports' in info:
                     if info['open_ports']:
                         for port, port_info in info['open_ports'].items():
-                            print(f"    Port {port} ({port_info['service']}): {port_info['os_fingerprint']}")
+                            service = port_info['service']
+                            os_fingerprint = port_info['os_fingerprint']
+                            
+                            # Color code different services
+                            if service == "SSH":
+                                service_color = Fore.CYAN
+                            elif service in ["HTTP", "HTTPS"]:
+                                service_color = Fore.GREEN
+                            elif service == "FTP":
+                                service_color = Fore.MAGENTA
+                            elif service == "RDP":
+                                service_color = Fore.BLUE
+                            else:
+                                service_color = Fore.WHITE
+                                
+                            print(f"    Port {Fore.YELLOW}{port} ({service_color}{service}{Style.RESET_ALL}): {os_fingerprint}")
                     else:
                         print("    No open ports found")
             return

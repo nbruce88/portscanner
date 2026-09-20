@@ -2,15 +2,14 @@
 
 A simple port scanner that performs threaded port scanning with additional features like service identification and banner grabbing.
 
-\\\
-              /\/\
+\\\\\\
+              /\\/\\
  ___--~^~~--_(-  -)_--~~^~--___
-^\        Port Scanner        /^
-   \   /\   /\    /\   /\   /
-     \/   \/  \  /   \/  \/
-              ^\/^
+ ^\\        Port Scanner        /^
+    \\   /\\   /\\    /\\   /\\   /
+      \\/   \\/  \\  /   \\/  \\/
+             ^\\/^
 
-\\\
 ## Features
 
 - **Threading support** for fast scanning of multiple ports
@@ -18,6 +17,8 @@ A simple port scanner that performs threaded port scanning with additional featu
 - **Banner grabbing** to retrieve service version information
 - **Multiple output formats** (JSON and CSV)
 - **Command-line interface** with flexible options
+- **Color-coded output** for improved readability
+- **Progress bar** using tqdm library for visual feedback during scanning
 
 ## Prerequisites
 
@@ -72,7 +73,7 @@ python portscanner.py 192.168.1.1 --save scan_results.csv
 
 ## Expected Output
 
-```
+```bash
 Starting scan of 192.168.1.1 on ports 1-1024
 Using 100 threads with 1.0s timeout
 Port 22 (SSH)
@@ -90,6 +91,15 @@ Open ports:
   443 (HTTPS)
 ==================================================
 ```
+
+## Color Coding
+
+The output now features color-coded services for improved readability:
+- **SSH** - Cyan
+- **HTTP/HTTPS** - Green  
+- **FTP** - Magenta
+- **RDP** - Blue
+- Other services - White
 
 ## Legal Disclaimer
 
