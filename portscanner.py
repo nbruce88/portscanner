@@ -11,7 +11,7 @@ from typing import List, Dict, Optional
 
 class PortScanner:
     """
-    An advanced port scanner that performs threaded port scanning with additional features.
+    A port scanner that performs threaded port scanning with additional features.
 
     This class provides functionality to scan ports on a target host using multiple threads,
     identify services running on open ports, and save results in various formats.
@@ -202,19 +202,19 @@ def main():
     """
     # Create argument parser for command line interface
     parser = argparse.ArgumentParser(
-        description="Advanced Port Scanner - Scan ports on a target host with threading",
+        description="Port Scanner - Scan ports on a target host with threading",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python advanced_scanner.py 192.168.1.1
-  python advanced_scanner.py example.com -p 80,443,22
-  python advanced_scanner.py target.com -p 1-1000 -t 200 --timeout 2.0
-  python advanced_scanner.py 10.0.0.1 --save scan_results.json
+  python portscanner.py 192.168.1.1
+  python portscanner.py example.com -p 80,443,22
+  python portscanner.py target.com -p 1-1000 -t 200 --timeout 2.0
+  python portscanner.py 10.0.0.1 --save scan_results.json
 
 To run this script:
-1. Save it as 'advanced_scanner.py'
+1. Save it as 'portscanner.py'
 2. Open terminal/command prompt in the same directory
-3. Run with: python advanced_scanner.py [arguments]
+3. Run with: python portscanner.py [arguments]
 
 Required arguments:
   target              Target IP address or hostname to scan
