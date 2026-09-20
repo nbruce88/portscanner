@@ -1,7 +1,16 @@
-# Advanced Port Scanner
+# Port Scanner
 
-An advanced port scanner that performs threaded port scanning with additional features like service identification and banner grabbing.
+A simple port scanner that performs threaded port scanning with additional features like service identification and banner grabbing.
 
+\\\
+              /\/\
+ ___--~^~~--_(-  -)_--~~^~--___
+^\        Port Scanner        /^
+   \   /\   /\    /\   /\   /
+     \/   \/  \  /   \/  \/
+              ^\/^
+
+\\\
 ## Features
 
 - **Threading support** for fast scanning of multiple ports
@@ -23,16 +32,16 @@ An advanced port scanner that performs threaded port scanning with additional fe
 
 ```bash
 # Scan default port range (1-1024) on a target IP
-python advanced_scanner.py 192.168.1.1
+python portscanner.py 192.168.1.1
 
 # Scan specific ports
-python advanced_scanner.py example.com -p 80,443,22
+python portscanner.py example.com -p 80,443,22
 
 # Scan a port range with custom thread count
-python advanced_scanner.py target.com -p 1-1000 -t 200
+python portscanner.py target.com -p 1-1000 -t 200
 
 # Scan with custom timeout and save results
-python advanced_scanner.py 10.0.0.1 --timeout 2.0 --save scan_results.json
+python portscanner.py 10.0.0.1 --timeout 2.0 --save scan_results.json
 ```
 
 ### Command Line Arguments
@@ -49,16 +58,16 @@ python advanced_scanner.py 10.0.0.1 --timeout 2.0 --save scan_results.json
 
 ```bash
 # Quick scan of common ports on localhost
-python advanced_scanner.py 127.0.0.1
+python portscanner.py 127.0.0.1
 
 # Scan specific web ports
-python advanced_scanner.py example.com -p 80,443,8080
+python portscanner.py example.com -p 80,443,8080
 
 # Scan a large port range with more threads
-python advanced_scanner.py target.com -p 1-5000 -t 500
+python portscanner.py target.com -p 1-5000 -t 500
 
 # Save results to CSV file
-python advanced_scanner.py 192.168.1.1 --save scan_results.csv
+python portscanner.py 192.168.1.1 --save scan_results.csv
 ```
 
 ## Expected Output
@@ -92,4 +101,4 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## Author
 
-Advanced Port Scanner
+Port Scanner

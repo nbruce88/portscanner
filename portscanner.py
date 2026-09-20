@@ -9,7 +9,7 @@ import json
 import csv
 from typing import List, Dict, Optional
 
-class AdvancedPortScanner:
+class PortScanner:
     """
     An advanced port scanner that performs threaded port scanning with additional features.
 
@@ -269,7 +269,7 @@ Note: This tool is intended for educational purposes and authorized security tes
             raise ValueError("Start port must be less than or equal to end port")
 
         # Create scanner instance
-        scanner = AdvancedPortScanner(args.target, start_port, end_port)
+        scanner = PortScanner(args.target, start_port, end_port)
         scanner.timeout = args.timeout
 
         print(f"Starting scan of {args.target} on ports {start_port}-{end_port}")
