@@ -2,7 +2,6 @@ import socket
 import threading
 import sys
 import time
-import platform
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import argparse
@@ -15,8 +14,7 @@ class PortScanner:
     A port scanner that performs threaded port scanning with additional features.
 
     This class provides functionality to scan ports on a target host using multiple threads,
-    identify services running on open ports, perform ping sweeps for network discovery,
-    and identify operating systems based on service ports.
+    identify services running on open ports, and save results in various formats.
     """
 
     def __init__(self, target: str, start_port: int = 1, end_port: int = 1024):
@@ -55,82 +53,6 @@ class PortScanner:
         }
         return services.get(port, "Unknown")
 
-    def get_os_fingerprint(self, port: int) -> str:
-        """
-        Attempt to determine OS based on service responses and banners.
-
-        This method performs basic OS fingerprinting by analyzing common service ports.
-        It identifies operating systems based on the services running on open ports.
-        Note: This is a simplified implementation for demonstration purposes.
-
-        Args:
-            port (int): Port number to analyze
-            
-        Returns:
-            str: OS fingerprint or "Unknown" if no match found
-        """
-        # This is a simplified version - real implementation would be more complex
-        # and require detailed banner analysis
-        
-        if port == 22:  # SSH
-            return "Linux/Unix"
-        elif port == 3389:  # RDP
-            return "Windows"
-        elif port in [80, 443]:  # HTTP/HTTPS
-            return "Web Server"
-        elif port == 21:  # FTP
-            return "FTP Server"
-        else:
-            return "Unknown"
-
-    def host_discovery(self, network_range: str) -> Dict[str, Dict]:
-        """
-        Perform comprehensive host discovery on a network range.
-        
-        This method performs both ping sweep and service detection to identify
-        active hosts and their services. It returns detailed information about
-        each discovered host including OS fingerprinting.
-        
-        Args:
-            network_range (str): Network range in CIDR notation (e.g., 192.168.1.0/24)
-            
-        Returns:
-            Dict[str, Dict]: Dictionary mapping IP addresses to host information
-        """
-        active_hosts = self.ping_sweep(network_range)
-        host_info = {}
-        
-        for host in active_hosts:
-            # For each active host, scan common ports to identify services
-            scanner = PortScanner(host, 1, 1024)  # Scan first 1024 ports
-            scanner.timeout = self.timeout
-            
-            try:
-                open_ports = scanner.scan_ports_threaded(50)  # Use fewer threads for discovery
-                
-                # Get detailed port information including OS fingerprinting
-                ports_info = {}
-                for port in open_ports:
-                    service = scanner.get_service_name(port)
-                    os_fingerprint = scanner.get_os_fingerprint(port)
-                    ports_info[port] = {
-                        'service': service,
-                        'os_fingerprint': os_fingerprint
-                    }
-                
-                host_info[host] = {
-                    'active': True,
-                    'open_ports': ports_info
-                }
-            except Exception as e:
-                # Even if scanning fails, we know the host is active
-                host_info[host] = {
-                    'active': True,
-                    'error': str(e)
-                }
-        
-        return host_info
-
     def scan_single_port(self, port: int) -> Optional[Dict]:
         """
         Scan a single port and collect detailed information about it.
@@ -161,8 +83,7 @@ class PortScanner:
                     'port': port,
                     'status': 'open',
                     'service': service,
-                    'banner': self.get_banner(port) if service != "Unknown" else None,
-                    'os_fingerprint': self.get_os_fingerprint(port)
+                    'banner': self.get_banner(port) if service != "Unknown" else None
                 }
 
                 # Thread-safe update of results
@@ -272,63 +193,6 @@ class PortScanner:
 
         print("="*50)
 
-    def ping_sweep(self, network_range: str) -> List[str]:
-        """
-        Perform a ping sweep to discover active hosts in a network range.
-
-        This method performs a network discovery by pinging hosts in the specified 
-        network range to identify which ones are active. It supports both Windows 
-        and Unix/Linux/Mac platforms using appropriate ping commands.
-
-        Args:
-            network_range (str): Network range in CIDR notation (e.g., 192.168.1.0/24)
-            
-        Returns:
-            List[str]: List of active IP addresses found in the network range
-        """
-        active_hosts = []
-        
-        try:
-            # Determine the operating system and use appropriate ping command
-            if platform.system().lower() == "windows":
-                # Windows ping command
-                cmd = ["ping", "-n", "1", "-w", "1000", network_range]
-            else:
-                # Unix/Linux/Mac ping command
-                cmd = ["ping", "-c", "1", "-W", "1", network_range]
-                
-            print(f"Performing ping sweep on {network_range}...")
-            
-            # This is a simplified approach - in production, you'd want more robust parsing
-            if platform.system().lower() == "windows":
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-            else:
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-                
-            # For demonstration purposes, let's assume we can scan a few hosts
-            # In practice, you'd parse the actual ping output to determine active hosts
-            
-            # Simple approach: try scanning first 5 IPs in the range
-            base_ip = network_range.split('.')[0] + '.' + network_range.split('.')[1] + '.' + network_range.split('.')[2]
-            for i in range(1, 6):
-                test_ip = f"{base_ip}.{i}"
-                try:
-                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    sock.settimeout(self.timeout)
-                    result = sock.connect_ex((test_ip, 80))
-                    sock.close()
-                    
-                    if result == 0:
-                        active_hosts.append(test_ip)
-                        print(f"Active host found: {test_ip}")
-                except:
-                    continue
-                    
-        except Exception as e:
-            print(f"Ping sweep error: {e}")
-            
-        return active_hosts
-
 def main():
     """
     Main function to parse command line arguments and execute the port scan.
@@ -346,8 +210,6 @@ Examples:
   python portscanner.py example.com -p 80,443,22
   python portscanner.py target.com -p 1-1000 -t 200 --timeout 2.0
   python portscanner.py 10.0.0.1 --save scan_results.json
-  python portscanner.py 192.168.1.0/24 --ping-sweep
-  python portscanner.py 192.168.1.0/24 --host-discovery
 
 To run this script:
 1. Save it as 'portscanner.py'
@@ -362,7 +224,6 @@ Optional arguments:
   -t, --threads       Maximum number of concurrent threads (default: 100)
   --timeout           Connection timeout in seconds (default: 1.0)
   --save              Save results to file (JSON or CSV format)
-  --ping-sweep        Perform ping sweep on network range
 
 Note: This tool is intended for educational purposes and authorized security testing only.
         """
@@ -377,8 +238,6 @@ Note: This tool is intended for educational purposes and authorized security tes
     parser.add_argument("--timeout", type=float, default=1.0,
                        help="Connection timeout in seconds (default: 1.0)")
     parser.add_argument("--save", help="Save results to file (JSON or CSV format)")
-    parser.add_argument("--ping-sweep", action="store_true", help="Perform ping sweep on network range")
-    parser.add_argument("--host-discovery", action="store_true", help="Perform comprehensive host discovery")
 
     # Parse command line arguments
     args = parser.parse_args()
@@ -408,35 +267,6 @@ Note: This tool is intended for educational purposes and authorized security tes
 
         if start_port > end_port:
             raise ValueError("Start port must be less than or equal to end port")
-            
-        # Check if ping sweep is requested
-        if args.ping_sweep:
-            print(f"Performing ping sweep on {args.target}")
-            scanner = PortScanner(args.target, start_port, end_port)
-            active_hosts = scanner.ping_sweep(args.target)
-            print(f"Found {len(active_hosts)} active hosts:")
-            for host in active_hosts:
-                print(f"  {host}")
-            return
-
-        # Check if host discovery is requested
-        if args.host_discovery:
-            print(f"Performing comprehensive host discovery on {args.target}")
-            scanner = PortScanner(args.target, start_port, end_port)
-            host_info = scanner.host_discovery(args.target)
-            print(f"Discovered {len(host_info)} hosts:")
-            
-            for host, info in host_info.items():
-                print(f"  {host}:")
-                if 'error' in info:
-                    print(f"    Error: {info['error']}")
-                elif 'open_ports' in info:
-                    if info['open_ports']:
-                        for port, port_info in info['open_ports'].items():
-                            print(f"    Port {port} ({port_info['service']}): {port_info['os_fingerprint']}")
-                    else:
-                        print("    No open ports found")
-            return
 
         # Create scanner instance
         scanner = PortScanner(args.target, start_port, end_port)
