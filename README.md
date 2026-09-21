@@ -18,6 +18,7 @@ A simple port scanner that performs threaded port scanning with additional featu
 - **Quiet/verbose output modes** for scripting or live per-port detail
 - **Multiple targets** in one run, via a comma-separated list and/or a targets file
 - **Retry on timeout** to avoid false negatives from a dropped packet or transient network blip
+- **Custom port lists** via a `--port-file`, and a **config file** (`--config`) for your usual default settings
 - **Multiple output formats** (JSON and CSV)
 - **Command-line interface** with flexible options
 - **Color-coded output** for improved readability
@@ -89,7 +90,32 @@ python portscanner.py --targets-file hosts.txt -p 1-1000
 
 # Retry twice (3 attempts total) on a timeout before giving up on a port
 python portscanner.py target.com -p 1-1000 --retries 2
+
+# Scan a custom list of ports from a file (one port or range per line)
+python portscanner.py target.com --port-file myports.txt
+
+# Use a config file for your usual defaults; any CLI flag still overrides it
+python portscanner.py target.com --config myconfig.json
 ```
+
+A `--port-file` looks like this (blank lines and `#` comments are ignored):
+```
+# web ports
+80
+443
+8080-8090
+```
+
+A `--config` file is JSON, and any of its keys can be overridden by the matching CLI flag:
+```json
+{
+  "threads": 200,
+  "timeout": 2.0,
+  "retries": 2,
+  "top_ports": 100
+}
+```
+Valid config keys: `ports`, `top_ports`, `port_file` (only one of these three), `threads`, `timeout`, `retries`, `save`, `randomize`, `quiet`, `verbose`. It does not set the target itself — that's still given on the command line or via `--targets-file`.
 
 ### Command Line Arguments
 
@@ -98,7 +124,9 @@ python portscanner.py target.com -p 1-1000 --retries 2
 | `target` | Target IP address or hostname to scan; comma-separate for multiple. Required unless `--targets-file` is given | `192.168.1.1` or `host1.com,host2.com` |
 | `--targets-file` | File with one target per line (blank lines and `#` comments ignored); combines with `target` and de-duplicates. Not supported with `--ping-sweep`/`--host-discovery` | `--targets-file hosts.txt` |
 | `-p`, `--ports` | Port range or specific ports (e.g., 80,443,22 or 1-1000); scans exactly the ports given, not the range spanning them | `-p 80,443,22` |
-| `--top-ports` | Scan the N most common ports (a hand-curated list, not `-p`/range-based); mutually exclusive with `-p` | `--top-ports 100` |
+| `--top-ports` | Scan the N most common ports (a hand-curated list, not `-p`/range-based); mutually exclusive with `-p`/`--port-file` | `--top-ports 100` |
+| `--port-file` | File with one port or port range per line (blank lines and `#` comments ignored); mutually exclusive with `-p`/`--top-ports` | `--port-file myports.txt` |
+| `--config` | JSON file of default settings (see below); any matching CLI flag overrides its value | `--config myconfig.json` |
 | `-t`, `--threads` | Maximum number of concurrent threads (default: 100) | `-t 200` |
 | `--timeout` | Connection timeout in seconds (default: 1.0) | `--timeout 2.0` |
 | `--retries` | Extra attempts on a connection *timeout* before marking a port closed (default: 1). A clean "connection refused" is never retried — only an actual timeout, since that's the ambiguous case | `--retries 2` |

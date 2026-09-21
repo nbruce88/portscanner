@@ -425,7 +425,35 @@ def main():
     """
     # Initialize colorama for cross-platform colored output
     colorama.init()
-    
+
+    # Pre-parse just --config so its values can become argparse defaults
+    # below, before the real command-line parsing happens
+    conf_parser = argparse.ArgumentParser(add_help=False)
+    conf_parser.add_argument("--config")
+    conf_args, _ = conf_parser.parse_known_args()
+
+    config_overrides = {}
+    if conf_args.config:
+        try:
+            with open(conf_args.config) as f:
+                config_overrides = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"Error: could not load config file '{conf_args.config}': {e}")
+            sys.exit(1)
+
+        allowed_keys = {"ports", "top_ports", "port_file", "threads", "timeout",
+                         "retries", "save", "randomize", "quiet", "verbose"}
+        unknown = set(config_overrides) - allowed_keys
+        if unknown:
+            print(f"Error: unknown config option(s): {', '.join(sorted(unknown))}")
+            sys.exit(1)
+        if sum(k in config_overrides for k in ("ports", "top_ports", "port_file")) > 1:
+            print("Error: config can only set one of ports / top_ports / port_file")
+            sys.exit(1)
+        if config_overrides.get("quiet") and config_overrides.get("verbose"):
+            print("Error: config cannot set both quiet and verbose")
+            sys.exit(1)
+
     # Create argument parser for command line interface
     parser = argparse.ArgumentParser(
         description="Port Scanner - Scan ports on a target host with threading",
@@ -443,6 +471,8 @@ Examples:
   python portscanner.py target.com -p 1-1000 -v
   python portscanner.py host1.com,host2.com,192.168.1.5 -p 80,443
   python portscanner.py --targets-file hosts.txt -p 1-1000
+  python portscanner.py target.com --port-file myports.txt
+  python portscanner.py target.com --config myconfig.json
 
 To run this script:
 1. Save it as 'portscanner.py'
@@ -456,6 +486,8 @@ Required arguments:
 Optional arguments:
   -p, --ports         Port range or specific ports (e.g., 80,443,22 or 1-1000)
   --top-ports         Scan the N most common ports instead of a range
+  --port-file         File with one port or port range per line (blank lines
+                       and lines starting with # are ignored)
   -t, --threads       Maximum number of concurrent threads (default: 100)
   --timeout           Connection timeout in seconds (default: 1.0)
   --retries           Extra attempts on a connection timeout before marking a
@@ -463,6 +495,8 @@ Optional arguments:
   --save              Save results to file (JSON or CSV format)
   --targets-file      File with one target per line (blank lines and lines
                        starting with # are ignored)
+  --config            JSON file of default settings; any CLI flag overrides
+                       its values
   --randomize         Scan ports in random order instead of sequential
   -q, --quiet         Suppress progress bar and setup messages
   -v, --verbose       Print each open port as it's found during the scan
@@ -476,11 +510,14 @@ Note: This tool is intended for educational purposes and authorized security tes
     parser.add_argument("target", nargs="?",
                        help="Target IP address or hostname(s) to scan (comma-separated for multiple)")
     parser.add_argument("--targets-file", help="File with one target per line")
+    parser.add_argument("--config", help="JSON file of default settings; any CLI flag overrides its values")
     port_group = parser.add_mutually_exclusive_group()
     port_group.add_argument("-p", "--ports",
                        help="Port range or specific ports (e.g., 80,443,22 or 1-1000)")
     port_group.add_argument("--top-ports", type=int, metavar="N",
                        help="Scan the N most common ports instead of a range")
+    port_group.add_argument("--port-file",
+                       help="File with one port or port range per line")
     parser.add_argument("-t", "--threads", type=int, default=100,
                        help="Maximum number of concurrent threads (default: 100)")
     parser.add_argument("--timeout", type=float, default=1.0,
@@ -496,6 +533,9 @@ Note: This tool is intended for educational purposes and authorized security tes
                        help="Print each open port as it's found during the scan")
     parser.add_argument("--ping-sweep", action="store_true", help="Perform ping sweep on network range")
     parser.add_argument("--host-discovery", action="store_true", help="Perform comprehensive host discovery")
+
+    # Config file values become the new defaults; explicit CLI flags still win
+    parser.set_defaults(**config_overrides)
 
     # Parse command line arguments
     args = parser.parse_args()
@@ -568,6 +608,19 @@ Note: This tool is intended for educational purposes and authorized security tes
                 ports = list(range(start_port, end_port + 1))
             else:
                 ports = [int(args.ports)]
+        elif args.port_file:
+            ports = []
+            with open(args.port_file) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    if '-' in line:
+                        start, end = map(int, line.split('-'))
+                        ports.extend(range(start, end + 1))
+                    else:
+                        ports.append(int(line))
+            ports = list(dict.fromkeys(ports))  # de-dup, preserve order
         else:
             ports = list(range(1, 1025))
 
