@@ -1,2 +1,2 @@
-# This project uses only standard Python libraries
-# No external dependencies required
+colorama>=0.4.6
+tqdm>=4.60.0

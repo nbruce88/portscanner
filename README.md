@@ -53,11 +53,12 @@ Version detection understands SSH banners (`SSH-<version>`) and HTTP/HTTPS `Serv
 ## Prerequisites
 
 - Python 3.6 or higher installed on your system
+- The `colorama` and `tqdm` packages (see Installation)
 
 ## Installation
 
 1. Clone or download this repository
-2. Make sure you have Python installed on your system
+2. Install dependencies: `pip install -r requirements.txt`
 
 ## Usage
 
@@ -265,10 +266,6 @@ The output now features color-coded services for improved readability:
 ## Legal Disclaimer
 
 ⚠️ This tool is intended for educational purposes and authorized security testing only. Always ensure you have proper authorization before scanning any network or system.
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
 
 ## Author
 
