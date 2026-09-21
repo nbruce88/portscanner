@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import argparse
 import json
 import csv
+import html
 from typing import List, Dict, Optional
 import colorama
 from colorama import Fore, Back, Style
@@ -359,17 +360,18 @@ class PortScanner:
                     except Exception as e:
                         print(f"Error scanning port {future_to_port[future]}: {e}")
 
+                    pbar.set_postfix(open=len(self.open_ports))
                     pbar.update(1)
 
         return self.open_ports
 
     def save_results(self, filename: str, file_format: str = 'json'):
         """
-        Save scan results to a file in JSON or CSV format.
+        Save scan results to a file in JSON, CSV, or HTML format.
 
         Args:
             filename (str): Path to the output file
-            file_format (str): Output format, either 'json' or 'csv'
+            file_format (str): Output format, one of 'json', 'csv', 'html'
         """
         if file_format == 'csv':
             with open(filename, 'w', newline='') as f:
@@ -381,6 +383,58 @@ class PortScanner:
                         info['port'], info['status'], info['service'],
                         info['banner'], info['version'], info['os_fingerprint']
                     ])
+        elif file_format == 'html':
+            rows = []
+            for port in sorted(self.open_ports):
+                info = self.port_info[port]
+                status = info.get('status', 'open')
+                status_class = 'status-open' if status == 'open' else 'status-ambiguous'
+                rows.append(f"""      <tr>
+        <td>{html.escape(str(info['port']))}</td>
+        <td class="{status_class}">{html.escape(status)}</td>
+        <td>{html.escape(info['service'])}</td>
+        <td>{html.escape(info['banner'] or '')}</td>
+        <td>{html.escape(info['version'] or '')}</td>
+        <td>{html.escape(info['os_fingerprint'])}</td>
+      </tr>""")
+
+            table_rows = '\n'.join(rows) if rows else '      <tr><td colspan="6">No open ports found.</td></tr>'
+            html_doc = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Port Scan Report - {html.escape(self.target)}</title>
+<style>
+  body {{ font-family: sans-serif; margin: 2rem; color: #222; }}
+  h1 {{ font-size: 1.4rem; }}
+  table {{ border-collapse: collapse; width: 100%; margin-top: 1rem; }}
+  th, td {{ border: 1px solid #ccc; padding: 0.5rem; text-align: left; }}
+  th {{ background: #f2f2f2; }}
+  .status-open {{ color: #1a7f37; font-weight: bold; }}
+  .status-ambiguous {{ color: #9a6700; font-weight: bold; }}
+  .meta {{ color: #555; margin-bottom: 1rem; }}
+</style>
+</head>
+<body>
+  <h1>Port Scan Report: {html.escape(self.target)}</h1>
+  <p class="meta">
+    Ports scanned: {len(self.ports)} &middot;
+    Open ports found: {len(self.open_ports)} &middot;
+    Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+  </p>
+  <table>
+    <thead>
+      <tr><th>Port</th><th>Status</th><th>Service</th><th>Banner</th><th>Version</th><th>OS Guess</th></tr>
+    </thead>
+    <tbody>
+{table_rows}
+    </tbody>
+  </table>
+</body>
+</html>
+"""
+            with open(filename, 'w', encoding='utf-8') as f:
+                f.write(html_doc)
         else:
             with open(filename, 'w') as f:
                 json.dump({
@@ -773,6 +827,8 @@ Note: This tool is intended for educational purposes and authorized security tes
                 # Determine format from filename extension
                 if save_path.endswith('.csv'):
                     scanner.save_results(save_path, 'csv')
+                elif save_path.endswith(('.html', '.htm')):
+                    scanner.save_results(save_path, 'html')
                 else:
                     scanner.save_results(save_path, 'json')
                 print(f"Results saved to {save_path}")

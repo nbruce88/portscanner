@@ -20,10 +20,10 @@ A simple port scanner that performs threaded port scanning with additional featu
 - **Retry on timeout** to avoid false negatives from a dropped packet or transient network blip
 - **Custom port lists** via a `--port-file`, and a **config file** (`--config`) for your usual default settings
 - **UDP scanning** (`--udp`) alongside the default TCP scanning
-- **Multiple output formats** (JSON and CSV)
+- **Multiple output formats** (JSON, CSV, and a self-contained HTML report)
 - **Command-line interface** with flexible options
 - **Color-coded output** for improved readability
-- **Progress bar** using tqdm library for visual feedback during scanning
+- **Progress bar** with a live open-port count, using tqdm library for visual feedback during scanning
 
 ## Banner Grabbing Feature
 
@@ -144,7 +144,7 @@ Two honest limitations worth knowing: the probe sent is an empty UDP datagram, n
 | `-t`, `--threads` | Maximum number of concurrent threads (default: 100) | `-t 200` |
 | `--timeout` | Connection timeout in seconds (default: 1.0) | `--timeout 2.0` |
 | `--retries` | Extra attempts on a connection *timeout* before marking a port closed (default: 1). A clean "connection refused" is never retried — only an actual timeout, since that's the ambiguous case | `--retries 2` |
-| `--save` | Save results to a file; format is inferred from the extension (`.json` or `.csv`). With multiple targets, each host's results are saved to their own file (target name inserted before the extension, e.g. `results_192.168.1.1.json`) | `--save results.json` |
+| `--save` | Save results to a file; format is inferred from the extension (`.json`, `.csv`, or `.html`/`.htm`). With multiple targets, each host's results are saved to their own file (target name inserted before the extension, e.g. `results_192.168.1.1.json`) | `--save results.json` |
 | `--randomize` | Scan ports in random order instead of sequential | `--randomize` |
 | `-q`, `--quiet` | Suppress the progress bar and setup messages; the final summary still prints. Mutually exclusive with `-v` | `-q` |
 | `-v`, `--verbose` | Print each open port as soon as it's found, not just in the final summary. Mutually exclusive with `-q` | `-v` |
@@ -166,6 +166,9 @@ python portscanner.py target.com -p 1-5000 -t 500
 
 # Save results to CSV file
 python portscanner.py 192.168.1.1 --save scan_results.csv
+
+# Save a self-contained HTML report
+python portscanner.py 192.168.1.1 --save scan_report.html
 ```
 
 ## Expected Output
@@ -173,7 +176,7 @@ python portscanner.py 192.168.1.1 --save scan_results.csv
 ```bash
 Starting scan of 192.168.1.1 on 1024 ports
 Using 100 threads with 1.0s timeout
-Scanning Ports: 100%|##########| 1024/1024 [00:11<00:00, 92.14port/s]
+Scanning Ports: 100%|##########| 1024/1024 [00:11<00:00, 92.14port/s, open=2]
 
 ==================================================
 SCAN RESULTS FOR: 192.168.1.1
