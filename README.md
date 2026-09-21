@@ -5,7 +5,7 @@ A simple port scanner that performs threaded port scanning with additional featu
 \\\\\\
               /\\/\\
  ___--~^~~--_(-  -)_--~~^~--___
- ^\\        Port Scanner        /^
+ ^\\        Port Scanner           /^
     \\   /\\   /\\    /\\   /\\   /
       \\/   \\/  \\  /   \\/  \\/
              ^\\/^
@@ -16,6 +16,12 @@ A simple port scanner that performs threaded port scanning with additional featu
 - **Service identification** for common ports (HTTP, HTTPS, SSH, FTP, etc.)
 - **Banner grabbing** to retrieve service version information and detailed service data
 - **Version detection** from banners for services like SSH and HTTP
+- **Basic OS fingerprinting** guess based on which ports are open
+- **Ping sweep** using real threaded ICMP pings across an entire CIDR range to discover active hosts
+- **Host discovery** combining ping sweep with a port scan of each active host
+- **Top-ports presets** to scan a curated list of the most common ports instead of a range
+- **Randomized scan order** to avoid always hitting ports lowest-to-highest
+- **Quiet/verbose output modes** for scripting or live per-port detail
 - **Multiple output formats** (JSON and CSV)
 - **Command-line interface** with flexible options
 - **Color-coded output** for improved readability
@@ -35,12 +41,10 @@ Example output with banner information:
 ```
   22 (SSH)
     Banner: SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.1
-    Version: 8.9p1
-  80 (HTTP)
-    Banner: HTTP/1.1 200 OK
-    Server: Apache/2.4.52 (Ubuntu)
-    Version: 2.4.52
+    Version: 8.9
 ```
+
+Version detection understands SSH banners (`SSH-<version>`) and HTTP/HTTPS `Server:` response headers specifically; for any other service it falls back to pulling the first version-looking number (e.g. `3.0.3`) out of the raw banner.
 
 ## Prerequisites
 
@@ -65,6 +69,21 @@ python portscanner.py target.com -p 1-1000 -t 200
 
 # Scan with custom timeout and save results
 python portscanner.py 10.0.0.1 --timeout 2.0 --save scan_results.json
+
+# Discover active hosts on a network range
+python portscanner.py 192.168.1.0/24 --ping-sweep
+
+# Discover hosts and scan each one's open ports
+python portscanner.py 192.168.1.0/24 --host-discovery
+
+# Scan the 100 most common ports in random order
+python portscanner.py target.com --top-ports 100 --randomize
+
+# Quiet mode for scripting (no progress bar or setup messages)
+python portscanner.py target.com -p 1-1000 -q
+
+# Verbose mode: print each open port as it's found
+python portscanner.py target.com -p 1-1000 -v
 ```
 
 ### Command Line Arguments
@@ -72,10 +91,16 @@ python portscanner.py 10.0.0.1 --timeout 2.0 --save scan_results.json
 | Argument | Description | Example |
 |----------|-------------|---------|
 | `target` | Target IP address or hostname to scan | `192.168.1.1` |
-| `-p`, `--ports` | Port range or specific ports (e.g., 80,443,22 or 1-1000) | `-p 80,443,22` |
-| `-t`, `--threads` | Number of concurrent threads | `-t 200` |
-| `--timeout` | Connection timeout in seconds | `--timeout 2.0` |
-| `--save` | Save results to file | `--save results.json` |
+| `-p`, `--ports` | Port range or specific ports (e.g., 80,443,22 or 1-1000); scans exactly the ports given, not the range spanning them | `-p 80,443,22` |
+| `--top-ports` | Scan the N most common ports (a hand-curated list, not `-p`/range-based); mutually exclusive with `-p` | `--top-ports 100` |
+| `-t`, `--threads` | Maximum number of concurrent threads (default: 100) | `-t 200` |
+| `--timeout` | Connection timeout in seconds (default: 1.0) | `--timeout 2.0` |
+| `--save` | Save results to a file; format is inferred from the extension (`.json` or `.csv`) | `--save results.json` |
+| `--randomize` | Scan ports in random order instead of sequential | `--randomize` |
+| `-q`, `--quiet` | Suppress the progress bar and setup messages; the final summary still prints. Mutually exclusive with `-v` | `-q` |
+| `-v`, `--verbose` | Print each open port as soon as it's found, not just in the final summary. Mutually exclusive with `-q` | `-v` |
+| `--ping-sweep` | Discover active hosts across a CIDR network range (e.g. `192.168.1.0/24`) using real ICMP pings, instead of scanning ports | `--ping-sweep` |
+| `--host-discovery` | Discover active hosts and scan each one's open ports | `--host-discovery` |
 
 ### Examples
 
@@ -96,23 +121,24 @@ python portscanner.py 192.168.1.1 --save scan_results.csv
 ## Expected Output
 
 ```bash
-Starting scan of 192.168.1.1 on ports 1-1024
+Starting scan of 192.168.1.1 on 1024 ports
 Using 100 threads with 1.0s timeout
-Port 22 (SSH)
-Port 80 (HTTP)
-Port 443 (HTTPS)
+Scanning Ports: 100%|##########| 1024/1024 [00:11<00:00, 92.14port/s]
 
 ==================================================
 SCAN RESULTS FOR: 192.168.1.1
-PORT RANGE: 1-1024
-OPEN PORTS FOUND: 3
+PORTS SCANNED: 1024
+OPEN PORTS FOUND: 2
 
 Open ports:
   22 (SSH)
+    Banner: SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.1
+    Version: 8.9
   80 (HTTP)
-  443 (HTTPS)
 ==================================================
 ```
+
+Banner and version lines are only shown when a banner could be grabbed for that service; unrecognized services show just the port number.
 
 ## Color Coding
 

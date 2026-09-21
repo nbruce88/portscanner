@@ -4,6 +4,9 @@ import sys
 import time
 import platform
 import subprocess
+import re
+import ipaddress
+import random
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import argparse
@@ -14,6 +17,16 @@ import colorama
 from colorama import Fore, Back, Style
 from tqdm import tqdm  # Added tqdm for progress bar
 
+# Hand-curated list of commonly-scanned ports, roughly ordered by how likely
+# they are to be interesting. Not derived from nmap's statistical frequency data.
+TOP_PORTS = [
+    21, 22, 23, 25, 53, 80, 110, 111, 135, 139, 143, 443, 445, 993, 995,
+    1723, 3306, 3389, 5900, 8080,
+    20, 69, 88, 123, 161, 162, 389, 465, 514, 587,
+    636, 902, 989, 990, 1025, 1433, 1521, 2049, 2082, 2083,
+    3268, 3269, 5060, 5061, 5432, 6379, 8000, 8443, 8888, 9200,
+]
+
 class PortScanner:
     """
     A port scanner that performs threaded port scanning with additional features.
@@ -23,22 +36,22 @@ class PortScanner:
     and identify operating systems based on service ports.
     """
 
-    def __init__(self, target: str, start_port: int = 1, end_port: int = 1024):
+    def __init__(self, target: str, ports: List[int]):
         """
-        Initialize the port scanner with target and port range.
+        Initialize the port scanner with target and the ports to scan.
 
         Args:
             target (str): Target IP address or hostname to scan
-            start_port (int): Starting port number for scanning (default: 1)
-            end_port (int): Ending port number for scanning (default: 1024)
+            ports (List[int]): Port numbers to scan
         """
         self.target = target
-        self.start_port = start_port
-        self.end_port = end_port
+        self.ports = list(ports)
         self.open_ports = []
         self.port_info = {}  # Store detailed port information
         self.lock = threading.Lock()  # Thread synchronization lock
         self.timeout = 1.0  # Connection timeout in seconds
+        self.verbose = False
+        self.quiet = False
 
     def get_service_name(self, port: int) -> str:
         """
@@ -94,19 +107,22 @@ class PortScanner:
         Returns:
             str: Detected version or "Unknown"
         """
+        if not banner:
+            return "Unknown"
+
         # Simple version detection based on banner content
         if service_name == "SSH":
             # Look for SSH version in banner
-            import re
             match = re.search(r'SSH-(\d+\.\d+)', banner)
             return match.group(1) if match else "Unknown"
         elif service_name == "HTTP" or service_name == "HTTPS":
             # Look for server information in banner
-            import re
             match = re.search(r'Server: (.+)', banner, re.IGNORECASE)
             return match.group(1).strip() if match else "Unknown"
         else:
-            return "Unknown"
+            # Generic best-effort: look for a version-like number in the banner
+            match = re.search(r'(\d+\.\d+(?:\.\d+)?)', banner)
+            return match.group(1) if match else "Unknown"
 
     def host_discovery(self, network_range: str) -> Dict[str, Dict]:
         """
@@ -127,7 +143,7 @@ class PortScanner:
         
         for host in active_hosts:
             # For each active host, scan common ports to identify services
-            scanner = PortScanner(host, 1, 1024)  # Scan first 1024 ports
+            scanner = PortScanner(host, list(range(1, 1025)))  # Scan first 1024 ports
             scanner.timeout = self.timeout
             
             try:
@@ -202,6 +218,9 @@ class PortScanner:
                     self.open_ports.append(port)
                     self.port_info[port] = port_info
 
+                if self.verbose:
+                    tqdm.write(f"[+] Port {port} open - {service}")
+
                 # Return the port info for the progress bar to handle display
                 return port_info
 
@@ -250,12 +269,12 @@ class PortScanner:
         Returns:
             List[int]: List of open port numbers
         """
-        ports = list(range(self.start_port, self.end_port + 1))
+        ports = self.ports
 
         with ThreadPoolExecutor(max_workers=max_threads) as executor:
             future_to_port = {executor.submit(self.scan_single_port, port): port for port in ports}
 
-            with tqdm(total=len(ports), desc="Scanning Ports", unit="port") as pbar:
+            with tqdm(total=len(ports), desc="Scanning Ports", unit="port", disable=self.quiet) as pbar:
                 for future in as_completed(future_to_port):
                     try:
                         future.result()
@@ -288,8 +307,7 @@ class PortScanner:
             with open(filename, 'w') as f:
                 json.dump({
                     'target': self.target,
-                    'start_port': self.start_port,
-                    'end_port': self.end_port,
+                    'ports_scanned': len(self.ports),
                     'open_ports': [self.port_info[port] for port in sorted(self.open_ports)]
                 }, f, indent=2)
 
@@ -299,7 +317,7 @@ class PortScanner:
         """
         print("\n" + "="*50)
         print(f"SCAN RESULTS FOR: {self.target}")
-        print(f"PORT RANGE: {self.start_port}-{self.end_port}")
+        print(f"PORTS SCANNED: {len(self.ports)}")
         print(f"OPEN PORTS FOUND: {len(self.open_ports)}")
 
         if self.open_ports:
@@ -348,49 +366,43 @@ class PortScanner:
             List[str]: List of active IP addresses found in the network range
         """
         active_hosts = []
-        
+
         try:
-            # Determine the operating system and use appropriate ping command
+            network = ipaddress.ip_network(network_range, strict=False)
+        except ValueError as e:
+            print(f"Invalid network range: {e}")
+            return active_hosts
+
+        hosts = list(network.hosts())
+        if not hosts:
+            hosts = [network.network_address]
+
+        print(f"Performing ping sweep on {network_range} ({len(hosts)} hosts)...")
+
+        def ping_host(ip: str) -> Optional[str]:
             if platform.system().lower() == "windows":
-                # Windows ping command
-                cmd = ["ping", "-n", "1", "-w", "1000", network_range]
+                cmd = ["ping", "-n", "1", "-w", str(int(self.timeout * 1000)), str(ip)]
             else:
-                # Unix/Linux/Mac ping command
-                cmd = ["ping", "-c", "1", "-W", "1", network_range]
-                
-            print(f"Performing ping sweep on {network_range}...")
-            
-            # This is a simplified approach - in production, you'd want more robust parsing
-            if platform.system().lower() == "windows":
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-            else:
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-                
-            # For demonstration purposes, let's assume we can scan a few hosts
-            # In practice, you'd parse the actual ping output to determine active hosts
-            
-            # Simple approach: try scanning first 5 IPs in the range
-            base_ip = network_range.split('.')[0] + '.' + network_range.split('.')[1] + '.' + network_range.split('.')[2]
-            for i in range(1, 6):
-                test_ip = f"{base_ip}.{i}"
-                try:
-                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    sock.settimeout(self.timeout)
-                    result = sock.connect_ex((test_ip, 80))
-                    sock.close()
-                    
-                    if result == 0:
-                        active_hosts.append(test_ip)
-                        print(f"Active host found: {Fore.GREEN}{test_ip}{Style.RESET_ALL}")
-                    else:
-                        print(f"Host {Fore.RED}{test_ip}{Style.RESET_ALL} is not responding")
-                except:
-                    continue
-                    
-        except Exception as e:
-            print(f"Ping sweep error: {e}")
-            
-        return active_hosts
+                cmd = ["ping", "-c", "1", "-W", str(max(1, int(self.timeout))), str(ip)]
+
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=self.timeout + 2)
+                return str(ip) if result.returncode == 0 else None
+            except Exception:
+                return None
+
+        with ThreadPoolExecutor(max_workers=min(100, len(hosts))) as executor:
+            future_to_ip = {executor.submit(ping_host, ip): ip for ip in hosts}
+
+            with tqdm(total=len(hosts), desc="Ping sweep", unit="host") as pbar:
+                for future in as_completed(future_to_ip):
+                    ip = future.result()
+                    if ip:
+                        active_hosts.append(ip)
+                        tqdm.write(f"Active: {Fore.GREEN}{ip}{Style.RESET_ALL}")
+                    pbar.update(1)
+
+        return sorted(active_hosts, key=lambda ip: ipaddress.ip_address(ip))
 
 def main():
     """
@@ -414,6 +426,9 @@ Examples:
   python portscanner.py 10.0.0.1 --save scan_results.json
   python portscanner.py 192.168.1.0/24 --ping-sweep
   python portscanner.py 192.168.1.0/24 --host-discovery
+  python portscanner.py target.com --top-ports 100 --randomize
+  python portscanner.py target.com -p 1-1000 -q
+  python portscanner.py target.com -p 1-1000 -v
 
 To run this script:
 1. Save it as 'portscanner.py'
@@ -425,9 +440,13 @@ Required arguments:
 
 Optional arguments:
   -p, --ports         Port range or specific ports (e.g., 80,443,22 or 1-1000)
+  --top-ports         Scan the N most common ports instead of a range
   -t, --threads       Maximum number of concurrent threads (default: 100)
   --timeout           Connection timeout in seconds (default: 1.0)
   --save              Save results to file (JSON or CSV format)
+  --randomize         Scan ports in random order instead of sequential
+  -q, --quiet         Suppress progress bar and setup messages
+  -v, --verbose       Print each open port as it's found during the scan
   --ping-sweep        Perform ping sweep on network range
 
 Note: This tool is intended for educational purposes and authorized security testing only.
@@ -436,13 +455,22 @@ Note: This tool is intended for educational purposes and authorized security tes
 
     # Add command line arguments
     parser.add_argument("target", help="Target IP address or hostname to scan")
-    parser.add_argument("-p", "--ports",
+    port_group = parser.add_mutually_exclusive_group()
+    port_group.add_argument("-p", "--ports",
                        help="Port range or specific ports (e.g., 80,443,22 or 1-1000)")
+    port_group.add_argument("--top-ports", type=int, metavar="N",
+                       help="Scan the N most common ports instead of a range")
     parser.add_argument("-t", "--threads", type=int, default=100,
                        help="Maximum number of concurrent threads (default: 100)")
     parser.add_argument("--timeout", type=float, default=1.0,
                        help="Connection timeout in seconds (default: 1.0)")
     parser.add_argument("--save", help="Save results to file (JSON or CSV format)")
+    parser.add_argument("--randomize", action="store_true", help="Scan ports in random order instead of sequential")
+    verbosity_group = parser.add_mutually_exclusive_group()
+    verbosity_group.add_argument("-q", "--quiet", action="store_true",
+                       help="Suppress progress bar and setup messages")
+    verbosity_group.add_argument("-v", "--verbose", action="store_true",
+                       help="Print each open port as it's found during the scan")
     parser.add_argument("--ping-sweep", action="store_true", help="Perform ping sweep on network range")
     parser.add_argument("--host-discovery", action="store_true", help="Perform comprehensive host discovery")
 
@@ -450,35 +478,10 @@ Note: This tool is intended for educational purposes and authorized security tes
     args = parser.parse_args()
 
     try:
-        # Validate and parse port range
-        if args.ports:
-            # Handle both single ports and ranges
-            if ',' in args.ports:
-                # Parse comma-separated ports
-                ports = [int(p.strip()) for p in args.ports.split(',')]
-                start_port, end_port = min(ports), max(ports)
-            elif '-' in args.ports:
-                # Parse range format (e.g., 1-1000)
-                start_port, end_port = map(int, args.ports.split('-'))
-            else:
-                # Single port
-                port = int(args.ports)
-                start_port, end_port = port, port
-        else:
-            # Default to common ports range
-            start_port, end_port = 1, 1024
-
-        # Validate port range
-        if not (1 <= start_port <= 65535 and 1 <= end_port <= 65535):
-            raise ValueError("Port numbers must be between 1 and 65535")
-
-        if start_port > end_port:
-            raise ValueError("Start port must be less than or equal to end port")
-            
         # Check if ping sweep is requested
         if args.ping_sweep:
             print(f"Performing ping sweep on {args.target}")
-            scanner = PortScanner(args.target, start_port, end_port)
+            scanner = PortScanner(args.target, [])
             active_hosts = scanner.ping_sweep(args.target)
             print(f"Found {len(active_hosts)} active hosts:")
             for host in active_hosts:
@@ -488,7 +491,7 @@ Note: This tool is intended for educational purposes and authorized security tes
         # Check if host discovery is requested
         if args.host_discovery:
             print(f"Performing comprehensive host discovery on {args.target}")
-            scanner = PortScanner(args.target, start_port, end_port)
+            scanner = PortScanner(args.target, [])
             host_info = scanner.host_discovery(args.target)
             print(f"Discovered {len(host_info)} hosts:")
             
@@ -519,12 +522,49 @@ Note: This tool is intended for educational purposes and authorized security tes
                         print("    No open ports found")
             return
 
-        # Create scanner instance
-        scanner = PortScanner(args.target, start_port, end_port)
-        scanner.timeout = args.timeout
+        # Build the list of ports to scan
+        if args.top_ports:
+            if args.top_ports <= 0:
+                raise ValueError("--top-ports must be a positive integer")
+            ports = TOP_PORTS[:args.top_ports]
+            if args.top_ports > len(TOP_PORTS):
+                print(f"Only {len(TOP_PORTS)} curated top ports available; scanning all of them")
+        elif args.ports:
+            if ',' in args.ports:
+                ports = [int(p.strip()) for p in args.ports.split(',')]
+            elif '-' in args.ports:
+                start_port, end_port = map(int, args.ports.split('-'))
+                ports = list(range(start_port, end_port + 1))
+            else:
+                ports = [int(args.ports)]
+        else:
+            ports = list(range(1, 1025))
 
-        print(f"Starting scan of {args.target} on ports {start_port}-{end_port}")
-        print(f"Using {args.threads} threads with {args.timeout}s timeout")
+        if not all(1 <= p <= 65535 for p in ports):
+            raise ValueError("Port numbers must be between 1 and 65535")
+
+        if args.threads <= 0:
+            raise ValueError("Thread count must be a positive integer")
+
+        if args.randomize:
+            random.shuffle(ports)
+
+        # Resolve the target up front so a typo'd hostname fails fast instead of
+        # silently scanning nothing and reporting "no open ports found"
+        try:
+            socket.gethostbyname(args.target)
+        except socket.gaierror:
+            raise ValueError(f"Could not resolve target '{args.target}'")
+
+        # Create scanner instance
+        scanner = PortScanner(args.target, ports)
+        scanner.timeout = args.timeout
+        scanner.verbose = args.verbose
+        scanner.quiet = args.quiet
+
+        if not args.quiet:
+            print(f"Starting scan of {args.target} on {len(ports)} ports")
+            print(f"Using {args.threads} threads with {args.timeout}s timeout")
 
         # Perform the scan
         open_ports = scanner.scan_ports_threaded(args.threads)
