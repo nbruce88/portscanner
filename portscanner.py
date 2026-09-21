@@ -59,31 +59,52 @@ class PortScanner:
         }
         return services.get(port, "Unknown")
 
-    def get_os_fingerprint(self, port: int) -> str:
+    def get_banner(self, host: str, port: int, timeout: float = 2.0) -> str:
         """
-        Attempt to determine OS based on service responses and banners.
-
-        This method performs basic OS fingerprinting by analyzing common service ports.
-        It identifies operating systems based on the services running on open ports.
-        Note: This is a simplified implementation for demonstration purposes.
+        Grab service banners from open ports for detailed identification.
 
         Args:
-            port (int): Port number to analyze
-            
+            host (str): Host to connect to
+            port (int): Port number to connect to
+            timeout (float): Connection timeout in seconds
+
         Returns:
-            str: OS fingerprint or "Unknown" if no match found
+            str: Service banner or "No banner" if connection fails
         """
-        # This is a simplified version - real implementation would be more complex
-        # and require detailed banner analysis
-        
-        if port == 22:  # SSH
-            return "Linux/Unix"
-        elif port == 3389:  # RDP
-            return "Windows"
-        elif port in [80, 443]:  # HTTP/HTTPS
-            return "Web Server"
-        elif port == 21:  # FTP
-            return "FTP Server"
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(timeout)
+            sock.connect((host, port))
+            banner = sock.recv(1024).decode('utf-8', errors='ignore')
+            sock.close()
+            return banner.strip() if banner.strip() else "No banner"
+        except Exception as e:
+            # Log the exception for debugging
+            print(f"Error getting banner from {host}:{port} - {e}")
+            return "No banner"
+
+    def detect_version(self, service_name: str, banner: str) -> str:
+        """
+        Detect service versions from banners.
+
+        Args:
+            service_name (str): Name of the service
+            banner (str): Service banner text
+
+        Returns:
+            str: Detected version or "Unknown"
+        """
+        # Simple version detection based on banner content
+        if service_name == "SSH":
+            # Look for SSH version in banner
+            import re
+            match = re.search(r'SSH-(\d+\.\d+)', banner)
+            return match.group(1) if match else "Unknown"
+        elif service_name == "HTTP" or service_name == "HTTPS":
+            # Look for server information in banner
+            import re
+            match = re.search(r'Server: (.+)', banner, re.IGNORECASE)
+            return match.group(1).strip() if match else "Unknown"
         else:
             return "Unknown"
 
@@ -160,12 +181,19 @@ class PortScanner:
                 # Get service name for the port
                 service = self.get_service_name(port)
 
+                # Get banner information
+                banner = self.get_banner(self.target, port, self.timeout) if service != "Unknown" else None
+                
+                # Detect version from banner
+                version = self.detect_version(service, banner) if banner and banner != "No banner" else "Unknown"
+
                 # Create detailed port information
                 port_info = {
                     'port': port,
                     'status': 'open',
                     'service': service,
-                    'banner': self.get_banner(port) if service != "Unknown" else None,
+                    'banner': banner,
+                    'version': version,
                     'os_fingerprint': self.get_os_fingerprint(port)
                 }
 
@@ -184,38 +212,6 @@ class PortScanner:
             # Handle any exceptions during scanning
             return None
 
-    def get_banner(self, port: int) -> Optional[str]:
-        """
-        Attempt to retrieve service banner information from an open port.
-
-        This function connects to a port and attempts to read initial response data
-        which often contains version information about the running service.
-
-        Args:
-            port (int): Port number to get banner from
-
-        Returns:
-            str or None: Banner information or None if unsuccessful
-        """
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(2.0)  # Shorter timeout for banner grabbing
-            sock.connect((self.target, port))
-
-            # Attempt to receive banner data based on service type
-            if port == 21:  # FTP
-                banner = sock.recv(1024).decode('utf-8', errors='ignore')
-            elif port in [22, 23]:  # SSH/Telnet
-                banner = sock.recv(1024).decode('utf-8', errors='ignore')
-            else:
-                banner = sock.recv(1024).decode('utf-8', errors='ignore')
-
-            sock.close()
-            return banner.strip() if banner else None
-
-        except Exception:
-            return None
-
     def scan_ports(self) -> List[int]:
         """
         Scan all ports in the specified range.
@@ -224,6 +220,25 @@ class PortScanner:
             List[int]: List of open port numbers
         """
         return self.open_ports
+
+    def get_os_fingerprint(self, port: int) -> str:
+        """
+        Provide a rough OS fingerprint guess based on the open port.
+
+        Args:
+            port (int): Port number to base the guess on
+
+        Returns:
+            str: A simple OS guess derived from common service ports
+        """
+        windows_ports = {135, 139, 445, 3389}
+        unix_ports = {22, 111, 2049}
+        if port in windows_ports:
+            return "Likely Windows"
+        elif port in unix_ports:
+            return "Likely Unix/Linux"
+        else:
+            return "Unknown"
 
     def scan_ports_threaded(self, max_threads: int = 100) -> List[int]:
         """
@@ -235,31 +250,48 @@ class PortScanner:
         Returns:
             List[int]: List of open port numbers
         """
-        # Create a list of all ports in the range
         ports = list(range(self.start_port, self.end_port + 1))
-        
-        # Use ThreadPoolExecutor for parallel scanning with progress bar
+
         with ThreadPoolExecutor(max_workers=max_threads) as executor:
-            # Submit all port scanning tasks with progress tracking
             future_to_port = {executor.submit(self.scan_single_port, port): port for port in ports}
-            
-            # Create progress bar and update it during scan
+
             with tqdm(total=len(ports), desc="Scanning Ports", unit="port") as pbar:
-                # Process completed tasks
                 for future in as_completed(future_to_port):
                     try:
-                        result = future.result()
-                        if result:
-                            # The result is already stored in self.open_ports and self.port_info
-                            pass  # Already handled in scan_single_port
+                        future.result()
                     except Exception as e:
-                        # Handle any exceptions during thread execution
                         print(f"Error scanning port {future_to_port[future]}: {e}")
-                    
-                    # Update progress bar after each completed task
+
                     pbar.update(1)
-        
+
         return self.open_ports
+
+    def save_results(self, filename: str, file_format: str = 'json'):
+        """
+        Save scan results to a file in JSON or CSV format.
+
+        Args:
+            filename (str): Path to the output file
+            file_format (str): Output format, either 'json' or 'csv'
+        """
+        if file_format == 'csv':
+            with open(filename, 'w', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(['port', 'status', 'service', 'banner', 'version', 'os_fingerprint'])
+                for port in sorted(self.open_ports):
+                    info = self.port_info[port]
+                    writer.writerow([
+                        info['port'], info['status'], info['service'],
+                        info['banner'], info['version'], info['os_fingerprint']
+                    ])
+        else:
+            with open(filename, 'w') as f:
+                json.dump({
+                    'target': self.target,
+                    'start_port': self.start_port,
+                    'end_port': self.end_port,
+                    'open_ports': [self.port_info[port] for port in sorted(self.open_ports)]
+                }, f, indent=2)
 
     def print_summary(self):
         """
@@ -273,7 +305,10 @@ class PortScanner:
         if self.open_ports:
             print("\nOpen ports:")
             for port in sorted(self.open_ports):
-                service = self.port_info[port]['service']
+                info = self.port_info[port]
+                service = info['service']
+                banner = info['banner']
+                version = info['version']
                 
                 # Color code different services
                 if service == "SSH":
@@ -287,7 +322,12 @@ class PortScanner:
                 else:
                     service_color = Fore.WHITE
                     
+                # Print port information with banner and version
                 print(f"  {Fore.YELLOW}{port} ({service_color}{service}{Style.RESET_ALL})")
+                if banner and banner != "No banner":
+                    print(f"    Banner: {banner}")
+                if version and version != "Unknown":
+                    print(f"    Version: {version}")
         else:
             print("\nNo open ports found.")
 

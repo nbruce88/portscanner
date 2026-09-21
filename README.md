@@ -14,11 +14,33 @@ A simple port scanner that performs threaded port scanning with additional featu
 
 - **Threading support** for fast scanning of multiple ports
 - **Service identification** for common ports (HTTP, HTTPS, SSH, FTP, etc.)
-- **Banner grabbing** to retrieve service version information
+- **Banner grabbing** to retrieve service version information and detailed service data
+- **Version detection** from banners for services like SSH and HTTP
 - **Multiple output formats** (JSON and CSV)
 - **Command-line interface** with flexible options
 - **Color-coded output** for improved readability
 - **Progress bar** using tqdm library for visual feedback during scanning
+
+## Banner Grabbing Feature
+
+The banner grabbing feature retrieves initial response data (service banners) from open ports, which often contain version information about the running services.
+
+When a port is found to be open, the scanner will:
+1. Connect to the port using a socket
+2. Read the service banner (initial response data)
+3. Extract version information where possible
+4. Display detailed information in the scan results
+
+Example output with banner information:
+```
+  22 (SSH)
+    Banner: SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.1
+    Version: 8.9p1
+  80 (HTTP)
+    Banner: HTTP/1.1 200 OK
+    Server: Apache/2.4.52 (Ubuntu)
+    Version: 2.4.52
+```
 
 ## Prerequisites
 
