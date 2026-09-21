@@ -13,10 +13,16 @@ import argparse
 import json
 import csv
 import html
+import logging
 from typing import List, Dict, Optional
 import colorama
 from colorama import Fore, Back, Style
 from tqdm import tqdm  # Added tqdm for progress bar
+
+# Audit-trail logger for --log-file. With no handler attached (the default,
+# when --log-file isn't given) every logger.info()/.warning() call below is
+# a silent no-op, so this is safe to reference unconditionally.
+logger = logging.getLogger("portscanner")
 
 def parse_port_spec(spec: str) -> List[int]:
     """Parse a port spec string: a comma list, an 'a-b' range, or a single port."""
@@ -272,6 +278,7 @@ class PortScanner:
 
                     if self.verbose:
                         tqdm.write(f"[+] Port {port} open - {service}")
+                    logger.info(f"Open port: {self.target}:{port} ({service}) status=open")
 
                     # Return the port info for the progress bar to handle display
                     return port_info
@@ -354,6 +361,7 @@ class PortScanner:
 
             if self.verbose:
                 tqdm.write(f"[+] Port {port} {status} - {service}")
+            logger.info(f"Open port: {self.target}:{port} ({service}) status={status}")
 
             return port_info
 
@@ -406,6 +414,8 @@ class PortScanner:
         ports = self.ports
         scan_fn = self.scan_single_port_udp if self.protocol == 'udp' else self.scan_single_port
 
+        logger.info(f"Scan started: {self.target} ({len(ports)} ports, protocol={self.protocol})")
+
         with ThreadPoolExecutor(max_workers=max_threads) as executor:
             future_to_port = {executor.submit(scan_fn, port): port for port in ports}
 
@@ -420,6 +430,8 @@ class PortScanner:
                     pbar.update(1)
 
         self.scan_duration = time.time() - start
+        logger.info(f"Scan completed: {self.target} - {len(self.open_ports)} open port(s) "
+                    f"in {self.scan_duration:.2f}s")
         return self.open_ports
 
     def save_results(self, filename: str, file_format: str = 'json'):
@@ -594,6 +606,7 @@ class PortScanner:
                     if ip:
                         active_hosts.append(ip)
                         tqdm.write(f"Active: {Fore.GREEN}{ip}{Style.RESET_ALL}")
+                        logger.info(f"Active host: {ip}")
                     pbar.update(1)
 
         return sorted(active_hosts, key=lambda ip: ipaddress.ip_address(ip))
@@ -676,7 +689,7 @@ def main():
 
         allowed_keys = {"ports", "top_ports", "port_file", "threads", "timeout",
                          "retries", "delay", "save", "randomize", "quiet", "verbose", "udp",
-                         "exclude_ports"}
+                         "exclude_ports", "log_file"}
         unknown = set(config_overrides) - allowed_keys
         if unknown:
             print(f"Error: unknown config option(s): {', '.join(sorted(unknown))}")
@@ -712,6 +725,7 @@ Examples:
   python portscanner.py --diff old_scan.json new_scan.json
   python portscanner.py 2001:db8::1 -p 1-1000
   python portscanner.py target.com -p 1-1000 --delay 0.2 -t 10
+  python portscanner.py target.com -p 1-1000 --log-file scan.log
 
 To run this script:
 1. Save it as 'portscanner.py'
@@ -735,6 +749,9 @@ Optional arguments:
   --delay             Seconds to pause before each connection attempt, to go
                        easier on the target (default: 0)
   --save              Save results to file (JSON or CSV format)
+  --log-file          Append a timestamped audit trail (command run, scan
+                       start/end, every open port, skipped targets) to this
+                       file, independent of --quiet/--verbose
   --exclude-ports     Ports to skip, same format as -p (e.g. 21,23 or
                        1-100); applied after -p/--top-ports/--port-file
   --diff              Compare two saved JSON scan results (OLD NEW) and
@@ -782,6 +799,8 @@ Note: This tool is intended for educational purposes and authorized security tes
     parser.add_argument("--exclude-ports",
                        help="Ports to skip, same format as -p; applied after -p/--top-ports/--port-file")
     parser.add_argument("--save", help="Save results to file (JSON or CSV format)")
+    parser.add_argument("--log-file",
+                       help="Append a timestamped audit trail to this file, independent of --quiet/--verbose")
     parser.add_argument("--randomize", action="store_true", help="Scan ports in random order instead of sequential")
     verbosity_group = parser.add_mutually_exclusive_group()
     verbosity_group.add_argument("-q", "--quiet", action="store_true",
@@ -800,6 +819,13 @@ Note: This tool is intended for educational purposes and authorized security tes
     args = parser.parse_args()
 
     try:
+        if args.log_file:
+            handler = logging.FileHandler(args.log_file)
+            handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
+            logger.addHandler(handler)
+            logger.setLevel(logging.INFO)
+            logger.info(f"Command: {' '.join(sys.argv)}")
+
         if args.diff:
             print_scan_diff(args.diff[0], args.diff[1])
             return
@@ -922,6 +948,7 @@ Note: This tool is intended for educational purposes and authorized security tes
                 resolved_targets.append(target)
             except socket.gaierror:
                 print(f"Skipping {target}: could not resolve")
+                logger.warning(f"Skipped target: {target} (could not resolve)")
 
         if not resolved_targets:
             raise ValueError("No targets could be resolved")
@@ -972,6 +999,8 @@ Note: This tool is intended for educational purposes and authorized security tes
             batch_elapsed = time.time() - batch_start
             print(f"\nScanned {len(resolved_targets)}/{len(targets)} target(s), "
                   f"{total_open} open port(s) total in {batch_elapsed:.2f}s")
+            logger.info(f"Batch complete: {len(resolved_targets)}/{len(targets)} target(s), "
+                        f"{total_open} open port(s) total in {batch_elapsed:.2f}s")
 
     except Exception as e:
         # Handle any errors during execution

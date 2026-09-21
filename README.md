@@ -24,6 +24,7 @@ A simple port scanner that performs threaded port scanning with additional featu
 - **IPv6 support** for direct scans (TCP/UDP), alongside IPv4
 - **Port exclusion** (`--exclude-ports`) to skip specific ports regardless of how the port list was built
 - **Result diffing** (`--diff`) to compare two saved scans and see what changed
+- **Audit logging** (`--log-file`) for a timestamped record of what was scanned and found
 - **Multiple output formats** (JSON, CSV, and a self-contained HTML report)
 - **Command-line interface** with flexible options
 - **Color-coded output** for improved readability
@@ -117,6 +118,9 @@ python portscanner.py --diff old_scan.json new_scan.json
 
 # Pace out connections instead of firing as fast as possible
 python portscanner.py target.com -p 1-1000 --delay 0.2 -t 10
+
+# Keep a timestamped audit trail of the scan
+python portscanner.py target.com -p 1-1000 --log-file scan.log
 ```
 
 A `--port-file` looks like this (blank lines and `#` comments are ignored):
@@ -136,7 +140,7 @@ A `--config` file is JSON, and any of its keys can be overridden by the matching
   "top_ports": 100
 }
 ```
-Valid config keys: `ports`, `top_ports`, `port_file` (only one of these three), `exclude_ports`, `threads`, `timeout`, `retries`, `delay`, `save`, `randomize`, `quiet`, `verbose`, `udp`. It does not set the target itself — that's still given on the command line or via `--targets-file`.
+Valid config keys: `ports`, `top_ports`, `port_file` (only one of these three), `exclude_ports`, `threads`, `timeout`, `retries`, `delay`, `save`, `log_file`, `randomize`, `quiet`, `verbose`, `udp`. It does not set the target itself — that's still given on the command line or via `--targets-file`.
 
 ## UDP Scanning
 
@@ -169,6 +173,19 @@ Changed (1):
 
 Only JSON is supported (it's the only saved format with full structured per-port data); CSV/HTML aren't diffable inputs.
 
+## Audit Logging
+
+`--log-file FILE` appends a timestamped record to the given file, independent of `--quiet`/`--verbose` (i.e. it keeps a full log even when the terminal is quiet). It captures the exact command run, when each scan started/finished, every open port found (with its status), and any targets that had to be skipped:
+
+```
+2026-09-21 11:21:49,468 INFO Command: portscanner.py 192.168.1.1 -p 1-1000 --log-file scan.log
+2026-09-21 11:21:49,469 INFO Scan started: 192.168.1.1 (1000 ports, protocol=tcp)
+2026-09-21 11:21:49,472 INFO Open port: 192.168.1.1:22 (SSH) status=open
+2026-09-21 11:21:49,495 INFO Scan completed: 192.168.1.1 - 1 open port(s) in 11.09s
+```
+
+The file is appended to, not overwritten, so pointing repeated scans at the same `--log-file` builds up a running history over time — a lighter-weight alternative to a full scan-history database.
+
 ### Command Line Arguments
 
 | Argument | Description | Example |
@@ -186,6 +203,7 @@ Only JSON is supported (it's the only saved format with full structured per-port
 | `--retries` | Extra attempts on a connection *timeout* before marking a port closed (default: 1). A clean "connection refused" is never retried — only an actual timeout, since that's the ambiguous case | `--retries 2` |
 | `--delay` | Seconds to pause before each connection attempt, to avoid flooding the target (default: 0) | `--delay 0.2` |
 | `--save` | Save results to a file; format is inferred from the extension (`.json`, `.csv`, or `.html`/`.htm`). With multiple targets, each host's results are saved to their own file (target name inserted before the extension, e.g. `results_192.168.1.1.json`) | `--save results.json` |
+| `--log-file` | Append a timestamped audit trail (command, scan start/end, open ports, skipped targets) to this file; independent of `--quiet`/`--verbose` (see [Audit Logging](#audit-logging) above) | `--log-file scan.log` |
 | `--randomize` | Scan ports in random order instead of sequential | `--randomize` |
 | `-q`, `--quiet` | Suppress the progress bar and setup messages; the final summary still prints. Mutually exclusive with `-v` | `-q` |
 | `-v`, `--verbose` | Print each open port as soon as it's found, not just in the final summary. Mutually exclusive with `-q` | `-v` |
