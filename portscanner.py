@@ -62,6 +62,7 @@ class PortScanner:
         self.lock = threading.Lock()  # Thread synchronization lock
         self.timeout = 1.0  # Connection timeout in seconds
         self.retries = 1  # Extra attempts on a timeout before giving up on a port
+        self.delay = 0.0  # Pause before each connection attempt, to go easier on the target
         self.protocol = 'tcp'
         self.verbose = False
         self.quiet = False
@@ -233,6 +234,8 @@ class PortScanner:
         """
         attempts = self.retries + 1
         for attempt in range(attempts):
+            if self.delay:
+                time.sleep(self.delay)
             try:
                 # Create socket for connection attempt
                 family, sockaddr = self._make_sockaddr(port)
@@ -311,6 +314,8 @@ class PortScanner:
         """
         attempts = self.retries + 1
         for attempt in range(attempts):
+            if self.delay:
+                time.sleep(self.delay)
             family, sockaddr = self._make_sockaddr(port)
             sock = socket.socket(family, socket.SOCK_DGRAM)
             sock.settimeout(self.timeout)
@@ -670,7 +675,7 @@ def main():
             sys.exit(1)
 
         allowed_keys = {"ports", "top_ports", "port_file", "threads", "timeout",
-                         "retries", "save", "randomize", "quiet", "verbose", "udp",
+                         "retries", "delay", "save", "randomize", "quiet", "verbose", "udp",
                          "exclude_ports"}
         unknown = set(config_overrides) - allowed_keys
         if unknown:
@@ -706,6 +711,7 @@ Examples:
   python portscanner.py target.com -p 1-1000 --exclude-ports 135,445
   python portscanner.py --diff old_scan.json new_scan.json
   python portscanner.py 2001:db8::1 -p 1-1000
+  python portscanner.py target.com -p 1-1000 --delay 0.2 -t 10
 
 To run this script:
 1. Save it as 'portscanner.py'
@@ -726,6 +732,8 @@ Optional arguments:
   --timeout           Connection timeout in seconds (default: 1.0)
   --retries           Extra attempts on a connection timeout before marking a
                        port closed (default: 1)
+  --delay             Seconds to pause before each connection attempt, to go
+                       easier on the target (default: 0)
   --save              Save results to file (JSON or CSV format)
   --exclude-ports     Ports to skip, same format as -p (e.g. 21,23 or
                        1-100); applied after -p/--top-ports/--port-file
@@ -769,6 +777,8 @@ Note: This tool is intended for educational purposes and authorized security tes
                        help="Connection timeout in seconds (default: 1.0)")
     parser.add_argument("--retries", type=int, default=1,
                        help="Extra attempts on a connection timeout before marking a port closed (default: 1)")
+    parser.add_argument("--delay", type=float, default=0.0,
+                       help="Seconds to pause before each connection attempt, to go easier on the target (default: 0)")
     parser.add_argument("--exclude-ports",
                        help="Ports to skip, same format as -p; applied after -p/--top-ports/--port-file")
     parser.add_argument("--save", help="Save results to file (JSON or CSV format)")
@@ -884,6 +894,9 @@ Note: This tool is intended for educational purposes and authorized security tes
         if args.retries < 0:
             raise ValueError("Retries must be zero or a positive integer")
 
+        if args.delay < 0:
+            raise ValueError("Delay must be zero or a positive number")
+
         if args.randomize:
             random.shuffle(ports)
 
@@ -919,6 +932,7 @@ Note: This tool is intended for educational purposes and authorized security tes
             scanner = PortScanner(target, ports)
             scanner.timeout = args.timeout
             scanner.retries = args.retries
+            scanner.delay = args.delay
             scanner.protocol = 'udp' if args.udp else 'tcp'
             scanner.verbose = args.verbose
             scanner.quiet = args.quiet

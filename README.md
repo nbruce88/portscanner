@@ -18,6 +18,7 @@ A simple port scanner that performs threaded port scanning with additional featu
 - **Quiet/verbose output modes** for scripting or live per-port detail
 - **Multiple targets** in one run, via a comma-separated list and/or a targets file
 - **Retry on timeout** to avoid false negatives from a dropped packet or transient network blip
+- **Rate limiting** (`--delay`) to pace out connection attempts and go easier on the target
 - **Custom port lists** via a `--port-file`, and a **config file** (`--config`) for your usual default settings
 - **UDP scanning** (`--udp`) alongside the default TCP scanning
 - **IPv6 support** for direct scans (TCP/UDP), alongside IPv4
@@ -113,6 +114,9 @@ python portscanner.py target.com -p 1-1000 --exclude-ports 135,445
 
 # Compare two saved scans to see what changed
 python portscanner.py --diff old_scan.json new_scan.json
+
+# Pace out connections instead of firing as fast as possible
+python portscanner.py target.com -p 1-1000 --delay 0.2 -t 10
 ```
 
 A `--port-file` looks like this (blank lines and `#` comments are ignored):
@@ -132,7 +136,7 @@ A `--config` file is JSON, and any of its keys can be overridden by the matching
   "top_ports": 100
 }
 ```
-Valid config keys: `ports`, `top_ports`, `port_file` (only one of these three), `exclude_ports`, `threads`, `timeout`, `retries`, `save`, `randomize`, `quiet`, `verbose`, `udp`. It does not set the target itself — that's still given on the command line or via `--targets-file`.
+Valid config keys: `ports`, `top_ports`, `port_file` (only one of these three), `exclude_ports`, `threads`, `timeout`, `retries`, `delay`, `save`, `randomize`, `quiet`, `verbose`, `udp`. It does not set the target itself — that's still given on the command line or via `--targets-file`.
 
 ## UDP Scanning
 
@@ -180,6 +184,7 @@ Only JSON is supported (it's the only saved format with full structured per-port
 | `-t`, `--threads` | Maximum number of concurrent threads (default: 100) | `-t 200` |
 | `--timeout` | Connection timeout in seconds (default: 1.0) | `--timeout 2.0` |
 | `--retries` | Extra attempts on a connection *timeout* before marking a port closed (default: 1). A clean "connection refused" is never retried — only an actual timeout, since that's the ambiguous case | `--retries 2` |
+| `--delay` | Seconds to pause before each connection attempt, to avoid flooding the target (default: 0) | `--delay 0.2` |
 | `--save` | Save results to a file; format is inferred from the extension (`.json`, `.csv`, or `.html`/`.htm`). With multiple targets, each host's results are saved to their own file (target name inserted before the extension, e.g. `results_192.168.1.1.json`) | `--save results.json` |
 | `--randomize` | Scan ports in random order instead of sequential | `--randomize` |
 | `-q`, `--quiet` | Suppress the progress bar and setup messages; the final summary still prints. Mutually exclusive with `-v` | `-q` |
