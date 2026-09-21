@@ -17,6 +17,7 @@ A simple port scanner that performs threaded port scanning with additional featu
 - **Randomized scan order** to avoid always hitting ports lowest-to-highest
 - **Quiet/verbose output modes** for scripting or live per-port detail
 - **Multiple targets** in one run, via a comma-separated list and/or a targets file
+- **Retry on timeout** to avoid false negatives from a dropped packet or transient network blip
 - **Multiple output formats** (JSON and CSV)
 - **Command-line interface** with flexible options
 - **Color-coded output** for improved readability
@@ -85,6 +86,9 @@ python portscanner.py host1.com,host2.com,192.168.1.5 -p 80,443
 
 # Scan targets listed in a file (one per line, # comments allowed)
 python portscanner.py --targets-file hosts.txt -p 1-1000
+
+# Retry twice (3 attempts total) on a timeout before giving up on a port
+python portscanner.py target.com -p 1-1000 --retries 2
 ```
 
 ### Command Line Arguments
@@ -97,6 +101,7 @@ python portscanner.py --targets-file hosts.txt -p 1-1000
 | `--top-ports` | Scan the N most common ports (a hand-curated list, not `-p`/range-based); mutually exclusive with `-p` | `--top-ports 100` |
 | `-t`, `--threads` | Maximum number of concurrent threads (default: 100) | `-t 200` |
 | `--timeout` | Connection timeout in seconds (default: 1.0) | `--timeout 2.0` |
+| `--retries` | Extra attempts on a connection *timeout* before marking a port closed (default: 1). A clean "connection refused" is never retried — only an actual timeout, since that's the ambiguous case | `--retries 2` |
 | `--save` | Save results to a file; format is inferred from the extension (`.json` or `.csv`). With multiple targets, each host's results are saved to their own file (target name inserted before the extension, e.g. `results_192.168.1.1.json`) | `--save results.json` |
 | `--randomize` | Scan ports in random order instead of sequential | `--randomize` |
 | `-q`, `--quiet` | Suppress the progress bar and setup messages; the final summary still prints. Mutually exclusive with `-v` | `-q` |

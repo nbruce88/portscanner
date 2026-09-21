@@ -50,6 +50,7 @@ class PortScanner:
         self.port_info = {}  # Store detailed port information
         self.lock = threading.Lock()  # Thread synchronization lock
         self.timeout = 1.0  # Connection timeout in seconds
+        self.retries = 1  # Extra attempts on a timeout before giving up on a port
         self.verbose = False
         self.quiet = False
 
@@ -185,51 +186,62 @@ class PortScanner:
         Returns:
             dict or None: Port information dictionary if open, None otherwise
         """
-        try:
-            # Create socket for connection attempt
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(self.timeout)  # Set timeout for connection
+        attempts = self.retries + 1
+        for attempt in range(attempts):
+            try:
+                # Create socket for connection attempt
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(self.timeout)  # Set timeout for connection
 
-            # Attempt to connect to the port
-            result = sock.connect_ex((self.target, port))
+                # Attempt to connect to the port
+                result = sock.connect_ex((self.target, port))
 
-            if result == 0:  # Port is open (connect_ex returns 0 on success)
-                # Get service name for the port
-                service = self.get_service_name(port)
+                if result == 0:  # Port is open (connect_ex returns 0 on success)
+                    # Get service name for the port
+                    service = self.get_service_name(port)
 
-                # Get banner information
-                banner = self.get_banner(self.target, port, self.timeout) if service != "Unknown" else None
-                
-                # Detect version from banner
-                version = self.detect_version(service, banner) if banner and banner != "No banner" else "Unknown"
+                    # Get banner information
+                    banner = self.get_banner(self.target, port, self.timeout) if service != "Unknown" else None
 
-                # Create detailed port information
-                port_info = {
-                    'port': port,
-                    'status': 'open',
-                    'service': service,
-                    'banner': banner,
-                    'version': version,
-                    'os_fingerprint': self.get_os_fingerprint(port)
-                }
+                    # Detect version from banner
+                    version = self.detect_version(service, banner) if banner and banner != "No banner" else "Unknown"
 
-                # Thread-safe update of results
-                with self.lock:
-                    self.open_ports.append(port)
-                    self.port_info[port] = port_info
+                    # Create detailed port information
+                    port_info = {
+                        'port': port,
+                        'status': 'open',
+                        'service': service,
+                        'banner': banner,
+                        'version': version,
+                        'os_fingerprint': self.get_os_fingerprint(port)
+                    }
 
-                if self.verbose:
-                    tqdm.write(f"[+] Port {port} open - {service}")
+                    # Thread-safe update of results
+                    with self.lock:
+                        self.open_ports.append(port)
+                        self.port_info[port] = port_info
 
-                # Return the port info for the progress bar to handle display
-                return port_info
+                    if self.verbose:
+                        tqdm.write(f"[+] Port {port} open - {service}")
 
-            sock.close()
-            return None
+                    # Return the port info for the progress bar to handle display
+                    return port_info
 
-        except Exception as e:
-            # Handle any exceptions during scanning
-            return None
+                # Definitive refusal (e.g. ECONNREFUSED) - no point retrying
+                sock.close()
+                return None
+
+            except socket.timeout:
+                # No response at all - could be packet loss, worth a retry
+                if attempt < attempts - 1:
+                    continue
+                return None
+
+            except Exception:
+                # Any other error is not retry-worthy
+                return None
+
+        return None
 
     def scan_ports(self) -> List[int]:
         """
@@ -446,6 +458,8 @@ Optional arguments:
   --top-ports         Scan the N most common ports instead of a range
   -t, --threads       Maximum number of concurrent threads (default: 100)
   --timeout           Connection timeout in seconds (default: 1.0)
+  --retries           Extra attempts on a connection timeout before marking a
+                       port closed (default: 1)
   --save              Save results to file (JSON or CSV format)
   --targets-file      File with one target per line (blank lines and lines
                        starting with # are ignored)
@@ -471,6 +485,8 @@ Note: This tool is intended for educational purposes and authorized security tes
                        help="Maximum number of concurrent threads (default: 100)")
     parser.add_argument("--timeout", type=float, default=1.0,
                        help="Connection timeout in seconds (default: 1.0)")
+    parser.add_argument("--retries", type=int, default=1,
+                       help="Extra attempts on a connection timeout before marking a port closed (default: 1)")
     parser.add_argument("--save", help="Save results to file (JSON or CSV format)")
     parser.add_argument("--randomize", action="store_true", help="Scan ports in random order instead of sequential")
     verbosity_group = parser.add_mutually_exclusive_group()
@@ -561,6 +577,9 @@ Note: This tool is intended for educational purposes and authorized security tes
         if args.threads <= 0:
             raise ValueError("Thread count must be a positive integer")
 
+        if args.retries < 0:
+            raise ValueError("Retries must be zero or a positive integer")
+
         if args.randomize:
             random.shuffle(ports)
 
@@ -594,6 +613,7 @@ Note: This tool is intended for educational purposes and authorized security tes
         for target in resolved_targets:
             scanner = PortScanner(target, ports)
             scanner.timeout = args.timeout
+            scanner.retries = args.retries
             scanner.verbose = args.verbose
             scanner.quiet = args.quiet
 
