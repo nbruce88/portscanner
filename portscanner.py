@@ -18,6 +18,16 @@ import colorama
 from colorama import Fore, Back, Style
 from tqdm import tqdm  # Added tqdm for progress bar
 
+def parse_port_spec(spec: str) -> List[int]:
+    """Parse a port spec string: a comma list, an 'a-b' range, or a single port."""
+    if ',' in spec:
+        return [int(p.strip()) for p in spec.split(',')]
+    elif '-' in spec:
+        start, end = map(int, spec.split('-'))
+        return list(range(start, end + 1))
+    else:
+        return [int(spec)]
+
 # Hand-curated list of commonly-scanned ports, roughly ordered by how likely
 # they are to be interesting. Not derived from nmap's statistical frequency data.
 TOP_PORTS = [
@@ -55,6 +65,8 @@ class PortScanner:
         self.protocol = 'tcp'
         self.verbose = False
         self.quiet = False
+        self._resolved = None  # Cached (family, numeric address) from _resolve_target
+        self.scan_duration = 0.0
 
     def get_service_name(self, port: int) -> str:
         """
@@ -75,12 +87,42 @@ class PortScanner:
         }
         return services.get(port, "Unknown")
 
-    def get_banner(self, host: str, port: int, timeout: float = 2.0) -> str:
+    def _resolve_target(self):
+        """
+        Resolve self.target once and cache the address family and numeric
+        address (works for IPv4 or IPv6, whichever the OS resolves to).
+
+        Returns:
+            tuple: (family, numeric_address)
+        """
+        if self._resolved is None:
+            infos = socket.getaddrinfo(self.target, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+            family, _, _, _, sockaddr = infos[0]
+            self._resolved = (family, sockaddr[0])
+        return self._resolved
+
+    def _make_sockaddr(self, port: int):
+        """
+        Build a (family, sockaddr) pair for connecting to a given port on
+        the resolved target, in the form each address family expects.
+
+        Args:
+            port (int): Port number to connect to
+
+        Returns:
+            tuple: (family, sockaddr) where sockaddr is a 2-tuple for IPv4
+                or a 4-tuple for IPv6
+        """
+        family, addr = self._resolve_target()
+        if family == socket.AF_INET6:
+            return family, (addr, port, 0, 0)
+        return family, (addr, port)
+
+    def get_banner(self, port: int, timeout: float = 2.0) -> str:
         """
         Grab service banners from open ports for detailed identification.
 
         Args:
-            host (str): Host to connect to
             port (int): Port number to connect to
             timeout (float): Connection timeout in seconds
 
@@ -88,15 +130,16 @@ class PortScanner:
             str: Service banner or "No banner" if connection fails
         """
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            family, sockaddr = self._make_sockaddr(port)
+            sock = socket.socket(family, socket.SOCK_STREAM)
             sock.settimeout(timeout)
-            sock.connect((host, port))
+            sock.connect(sockaddr)
             banner = sock.recv(1024).decode('utf-8', errors='ignore')
             sock.close()
             return banner.strip() if banner.strip() else "No banner"
         except Exception as e:
             # Log the exception for debugging
-            print(f"Error getting banner from {host}:{port} - {e}")
+            print(f"Error getting banner from {self.target}:{port} - {e}")
             return "No banner"
 
     def detect_version(self, service_name: str, banner: str) -> str:
@@ -192,18 +235,19 @@ class PortScanner:
         for attempt in range(attempts):
             try:
                 # Create socket for connection attempt
-                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                family, sockaddr = self._make_sockaddr(port)
+                sock = socket.socket(family, socket.SOCK_STREAM)
                 sock.settimeout(self.timeout)  # Set timeout for connection
 
                 # Attempt to connect to the port
-                result = sock.connect_ex((self.target, port))
+                result = sock.connect_ex(sockaddr)
 
                 if result == 0:  # Port is open (connect_ex returns 0 on success)
                     # Get service name for the port
                     service = self.get_service_name(port)
 
                     # Get banner information
-                    banner = self.get_banner(self.target, port, self.timeout) if service != "Unknown" else None
+                    banner = self.get_banner(port, self.timeout) if service != "Unknown" else None
 
                     # Detect version from banner
                     version = self.detect_version(service, banner) if banner and banner != "No banner" else "Unknown"
@@ -267,11 +311,12 @@ class PortScanner:
         """
         attempts = self.retries + 1
         for attempt in range(attempts):
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            family, sockaddr = self._make_sockaddr(port)
+            sock = socket.socket(family, socket.SOCK_DGRAM)
             sock.settimeout(self.timeout)
             status, banner = None, None
             try:
-                sock.connect((self.target, port))
+                sock.connect(sockaddr)
                 sock.send(b'')
                 data, _ = sock.recvfrom(1024)
                 status = 'open'
@@ -347,6 +392,12 @@ class PortScanner:
         Returns:
             List[int]: List of open port numbers
         """
+        start = time.time()
+
+        # Resolve once up front, before threading starts, to avoid a race
+        # from multiple threads triggering the lazy resolution simultaneously
+        self._resolve_target()
+
         ports = self.ports
         scan_fn = self.scan_single_port_udp if self.protocol == 'udp' else self.scan_single_port
 
@@ -363,6 +414,7 @@ class PortScanner:
                     pbar.set_postfix(open=len(self.open_ports))
                     pbar.update(1)
 
+        self.scan_duration = time.time() - start
         return self.open_ports
 
     def save_results(self, filename: str, file_format: str = 'json'):
@@ -450,6 +502,7 @@ class PortScanner:
         print("\n" + "="*50)
         print(f"SCAN RESULTS FOR: {self.target}")
         print(f"PORTS SCANNED: {len(self.ports)}")
+        print(f"SCAN DURATION: {self.scan_duration:.2f}s")
         print(f"OPEN PORTS FOUND: {len(self.open_ports)}")
 
         if self.open_ports:
@@ -540,6 +593,57 @@ class PortScanner:
 
         return sorted(active_hosts, key=lambda ip: ipaddress.ip_address(ip))
 
+def print_scan_diff(old_file: str, new_file: str):
+    """
+    Compare two saved JSON scan results and print what changed.
+
+    Args:
+        old_file (str): Path to the earlier scan's JSON results
+        new_file (str): Path to the later scan's JSON results
+    """
+    with open(old_file) as f:
+        old_data = json.load(f)
+    with open(new_file) as f:
+        new_data = json.load(f)
+
+    if old_data.get('target') != new_data.get('target'):
+        print(f"{Fore.YELLOW}Note: targets differ ({old_data.get('target')} vs {new_data.get('target')}){Style.RESET_ALL}")
+
+    old_ports = {p['port']: p for p in old_data.get('open_ports', [])}
+    new_ports = {p['port']: p for p in new_data.get('open_ports', [])}
+
+    newly_open = sorted(set(new_ports) - set(old_ports))
+    newly_closed = sorted(set(old_ports) - set(new_ports))
+    changed = sorted(
+        port for port in set(old_ports) & set(new_ports)
+        if (old_ports[port]['status'], old_ports[port]['service'], old_ports[port]['version'])
+           != (new_ports[port]['status'], new_ports[port]['service'], new_ports[port]['version'])
+    )
+
+    print(f"Comparing {old_file} -> {new_file}")
+    print(f"  Old target: {old_data.get('target', 'unknown')}")
+    print(f"  New target: {new_data.get('target', 'unknown')}\n")
+
+    if newly_open:
+        print(f"{Fore.GREEN}Newly open ({len(newly_open)}):{Style.RESET_ALL}")
+        for port in newly_open:
+            print(f"  {Fore.GREEN}+ {port} ({new_ports[port]['service']}){Style.RESET_ALL}")
+
+    if newly_closed:
+        print(f"{Fore.RED}No longer open ({len(newly_closed)}):{Style.RESET_ALL}")
+        for port in newly_closed:
+            print(f"  {Fore.RED}- {port} ({old_ports[port]['service']}){Style.RESET_ALL}")
+
+    if changed:
+        print(f"{Fore.YELLOW}Changed ({len(changed)}):{Style.RESET_ALL}")
+        for port in changed:
+            old_info, new_info = old_ports[port], new_ports[port]
+            print(f"  {Fore.YELLOW}~ {port}: {old_info['status']}/{old_info['service']}/{old_info['version']} -> "
+                  f"{new_info['status']}/{new_info['service']}/{new_info['version']}{Style.RESET_ALL}")
+
+    if not (newly_open or newly_closed or changed):
+        print("No differences found.")
+
 def main():
     """
     Main function to parse command line arguments and execute the port scan.
@@ -566,7 +670,8 @@ def main():
             sys.exit(1)
 
         allowed_keys = {"ports", "top_ports", "port_file", "threads", "timeout",
-                         "retries", "save", "randomize", "quiet", "verbose", "udp"}
+                         "retries", "save", "randomize", "quiet", "verbose", "udp",
+                         "exclude_ports"}
         unknown = set(config_overrides) - allowed_keys
         if unknown:
             print(f"Error: unknown config option(s): {', '.join(sorted(unknown))}")
@@ -598,6 +703,9 @@ Examples:
   python portscanner.py target.com --port-file myports.txt
   python portscanner.py target.com --config myconfig.json
   python portscanner.py target.com -p 53,123,161 --udp
+  python portscanner.py target.com -p 1-1000 --exclude-ports 135,445
+  python portscanner.py --diff old_scan.json new_scan.json
+  python portscanner.py 2001:db8::1 -p 1-1000
 
 To run this script:
 1. Save it as 'portscanner.py'
@@ -606,7 +714,8 @@ To run this script:
 
 Required arguments:
   target              Target IP address or hostname(s) to scan (comma-separated for
-                       multiple), required unless --targets-file is given
+                       multiple), required unless --targets-file is given. IPv4 and
+                       IPv6 (e.g. 2001:db8::1) are both supported for a direct scan
 
 Optional arguments:
   -p, --ports         Port range or specific ports (e.g., 80,443,22 or 1-1000)
@@ -618,6 +727,10 @@ Optional arguments:
   --retries           Extra attempts on a connection timeout before marking a
                        port closed (default: 1)
   --save              Save results to file (JSON or CSV format)
+  --exclude-ports     Ports to skip, same format as -p (e.g. 21,23 or
+                       1-100); applied after -p/--top-ports/--port-file
+  --diff              Compare two saved JSON scan results (OLD NEW) and
+                       report what changed; does not perform a live scan
   --targets-file      File with one target per line (blank lines and lines
                        starting with # are ignored)
   --config            JSON file of default settings; any CLI flag overrides
@@ -641,6 +754,8 @@ Note: This tool is intended for educational purposes and authorized security tes
                        help="Target IP address or hostname(s) to scan (comma-separated for multiple)")
     parser.add_argument("--targets-file", help="File with one target per line")
     parser.add_argument("--config", help="JSON file of default settings; any CLI flag overrides its values")
+    parser.add_argument("--diff", nargs=2, metavar=("OLD", "NEW"),
+                       help="Compare two saved JSON scan results and report what changed (no live scan)")
     port_group = parser.add_mutually_exclusive_group()
     port_group.add_argument("-p", "--ports",
                        help="Port range or specific ports (e.g., 80,443,22 or 1-1000)")
@@ -654,6 +769,8 @@ Note: This tool is intended for educational purposes and authorized security tes
                        help="Connection timeout in seconds (default: 1.0)")
     parser.add_argument("--retries", type=int, default=1,
                        help="Extra attempts on a connection timeout before marking a port closed (default: 1)")
+    parser.add_argument("--exclude-ports",
+                       help="Ports to skip, same format as -p; applied after -p/--top-ports/--port-file")
     parser.add_argument("--save", help="Save results to file (JSON or CSV format)")
     parser.add_argument("--randomize", action="store_true", help="Scan ports in random order instead of sequential")
     verbosity_group = parser.add_mutually_exclusive_group()
@@ -673,6 +790,10 @@ Note: This tool is intended for educational purposes and authorized security tes
     args = parser.parse_args()
 
     try:
+        if args.diff:
+            print_scan_diff(args.diff[0], args.diff[1])
+            return
+
         if args.targets_file and (args.ping_sweep or args.host_discovery):
             raise ValueError("--targets-file is not supported with --ping-sweep/--host-discovery; "
                               "those take a single CIDR range as the target")
@@ -733,13 +854,7 @@ Note: This tool is intended for educational purposes and authorized security tes
             if args.top_ports > len(TOP_PORTS):
                 print(f"Only {len(TOP_PORTS)} curated top ports available; scanning all of them")
         elif args.ports:
-            if ',' in args.ports:
-                ports = [int(p.strip()) for p in args.ports.split(',')]
-            elif '-' in args.ports:
-                start_port, end_port = map(int, args.ports.split('-'))
-                ports = list(range(start_port, end_port + 1))
-            else:
-                ports = [int(args.ports)]
+            ports = parse_port_spec(args.ports)
         elif args.port_file:
             ports = []
             with open(args.port_file) as f:
@@ -758,6 +873,10 @@ Note: This tool is intended for educational purposes and authorized security tes
 
         if not all(1 <= p <= 65535 for p in ports):
             raise ValueError("Port numbers must be between 1 and 65535")
+
+        if args.exclude_ports:
+            excluded = set(parse_port_spec(args.exclude_ports))
+            ports = [p for p in ports if p not in excluded]
 
         if args.threads <= 0:
             raise ValueError("Thread count must be a positive integer")
@@ -786,7 +905,7 @@ Note: This tool is intended for educational purposes and authorized security tes
         resolved_targets = []
         for target in targets:
             try:
-                socket.gethostbyname(target)
+                socket.getaddrinfo(target, None)  # IPv4/IPv6-agnostic resolvability check
                 resolved_targets.append(target)
             except socket.gaierror:
                 print(f"Skipping {target}: could not resolve")
@@ -795,7 +914,8 @@ Note: This tool is intended for educational purposes and authorized security tes
             raise ValueError("No targets could be resolved")
 
         total_open = 0
-        for target in resolved_targets:
+        batch_start = time.time()
+        for i, target in enumerate(resolved_targets, 1):
             scanner = PortScanner(target, ports)
             scanner.timeout = args.timeout
             scanner.retries = args.retries
@@ -805,7 +925,8 @@ Note: This tool is intended for educational purposes and authorized security tes
 
             if not args.quiet:
                 protocol_label = " (UDP)" if args.udp else ""
-                print(f"Starting scan of {target} on {len(ports)} ports{protocol_label}")
+                target_label = f" [{i}/{len(resolved_targets)}]" if len(resolved_targets) > 1 else ""
+                print(f"Starting scan of {target}{target_label} on {len(ports)} ports{protocol_label}")
                 print(f"Using {args.threads} threads with {args.timeout}s timeout")
 
             # Perform the scan
@@ -834,7 +955,9 @@ Note: This tool is intended for educational purposes and authorized security tes
                 print(f"Results saved to {save_path}")
 
         if len(targets) > 1:
-            print(f"\nScanned {len(resolved_targets)}/{len(targets)} target(s), {total_open} open port(s) total")
+            batch_elapsed = time.time() - batch_start
+            print(f"\nScanned {len(resolved_targets)}/{len(targets)} target(s), "
+                  f"{total_open} open port(s) total in {batch_elapsed:.2f}s")
 
     except Exception as e:
         # Handle any errors during execution

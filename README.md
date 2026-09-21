@@ -20,10 +20,14 @@ A simple port scanner that performs threaded port scanning with additional featu
 - **Retry on timeout** to avoid false negatives from a dropped packet or transient network blip
 - **Custom port lists** via a `--port-file`, and a **config file** (`--config`) for your usual default settings
 - **UDP scanning** (`--udp`) alongside the default TCP scanning
+- **IPv6 support** for direct scans (TCP/UDP), alongside IPv4
+- **Port exclusion** (`--exclude-ports`) to skip specific ports regardless of how the port list was built
+- **Result diffing** (`--diff`) to compare two saved scans and see what changed
 - **Multiple output formats** (JSON, CSV, and a self-contained HTML report)
 - **Command-line interface** with flexible options
 - **Color-coded output** for improved readability
 - **Progress bar** with a live open-port count, using tqdm library for visual feedback during scanning
+- **Scan duration** reported per target and for the whole batch on multi-target runs
 
 ## Banner Grabbing Feature
 
@@ -100,6 +104,15 @@ python portscanner.py target.com --config myconfig.json
 
 # Scan UDP ports instead of TCP
 python portscanner.py target.com -p 53,123,161 --udp
+
+# Scan an IPv6 target directly
+python portscanner.py 2001:db8::1 -p 1-1000
+
+# Scan a range but skip a few noisy ports
+python portscanner.py target.com -p 1-1000 --exclude-ports 135,445
+
+# Compare two saved scans to see what changed
+python portscanner.py --diff old_scan.json new_scan.json
 ```
 
 A `--port-file` looks like this (blank lines and `#` comments are ignored):
@@ -119,7 +132,7 @@ A `--config` file is JSON, and any of its keys can be overridden by the matching
   "top_ports": 100
 }
 ```
-Valid config keys: `ports`, `top_ports`, `port_file` (only one of these three), `threads`, `timeout`, `retries`, `save`, `randomize`, `quiet`, `verbose`, `udp`. It does not set the target itself — that's still given on the command line or via `--targets-file`.
+Valid config keys: `ports`, `top_ports`, `port_file` (only one of these three), `exclude_ports`, `threads`, `timeout`, `retries`, `save`, `randomize`, `quiet`, `verbose`, `udp`. It does not set the target itself — that's still given on the command line or via `--targets-file`.
 
 ## UDP Scanning
 
@@ -131,16 +144,39 @@ TCP scanning gets a clean yes/no answer (connection succeeds, or is refused). UD
 
 Two honest limitations worth knowing: the probe sent is an empty UDP datagram, not a protocol-specific payload (real DNS/SNMP/etc. queries), so services that only respond to well-formed requests will show as `open|filtered` rather than `open`. And UDP scans are typically slower than TCP ones — most non-responding ports have to wait out the full `--timeout` instead of getting an instant refusal.
 
+## Result Diffing
+
+`--diff OLD.json NEW.json` compares two previously saved (`--save foo.json`) scans and reports what changed — it doesn't perform a live scan itself. Typical workflow: scan and save now, scan and save again later (e.g. after some time, or after a change to the target), then diff the two files.
+
+```
+Comparing old_scan.json -> new_scan.json
+  Old target: 192.168.1.1
+  New target: 192.168.1.1
+
+Newly open (1):
+  + 8080 (HTTP)
+
+No longer open (1):
+  - 21 (FTP)
+
+Changed (1):
+  ~ 22: open/SSH/7.4 -> open/SSH/8.9
+```
+
+Only JSON is supported (it's the only saved format with full structured per-port data); CSV/HTML aren't diffable inputs.
+
 ### Command Line Arguments
 
 | Argument | Description | Example |
 |----------|-------------|---------|
-| `target` | Target IP address or hostname to scan; comma-separate for multiple. Required unless `--targets-file` is given | `192.168.1.1` or `host1.com,host2.com` |
+| `target` | Target IP address or hostname to scan; comma-separate for multiple. IPv4 and IPv6 both work. Required unless `--targets-file` is given | `192.168.1.1`, `2001:db8::1`, or `host1.com,host2.com` |
 | `--targets-file` | File with one target per line (blank lines and `#` comments ignored); combines with `target` and de-duplicates. Not supported with `--ping-sweep`/`--host-discovery` | `--targets-file hosts.txt` |
 | `-p`, `--ports` | Port range or specific ports (e.g., 80,443,22 or 1-1000); scans exactly the ports given, not the range spanning them | `-p 80,443,22` |
 | `--top-ports` | Scan the N most common ports (a hand-curated list, not `-p`/range-based); mutually exclusive with `-p`/`--port-file` | `--top-ports 100` |
 | `--port-file` | File with one port or port range per line (blank lines and `#` comments ignored); mutually exclusive with `-p`/`--top-ports` | `--port-file myports.txt` |
+| `--exclude-ports` | Ports to skip, same format as `-p`; applied after `-p`/`--top-ports`/`--port-file`, regardless of which was used | `--exclude-ports 135,445` |
 | `--config` | JSON file of default settings (see below); any matching CLI flag overrides its value | `--config myconfig.json` |
+| `--diff` | Compare two saved JSON scans and report what changed; performs no live scan (see [Result Diffing](#result-diffing) above) | `--diff old.json new.json` |
 | `-t`, `--threads` | Maximum number of concurrent threads (default: 100) | `-t 200` |
 | `--timeout` | Connection timeout in seconds (default: 1.0) | `--timeout 2.0` |
 | `--retries` | Extra attempts on a connection *timeout* before marking a port closed (default: 1). A clean "connection refused" is never retried — only an actual timeout, since that's the ambiguous case | `--retries 2` |
@@ -149,8 +185,8 @@ Two honest limitations worth knowing: the probe sent is an empty UDP datagram, n
 | `-q`, `--quiet` | Suppress the progress bar and setup messages; the final summary still prints. Mutually exclusive with `-v` | `-q` |
 | `-v`, `--verbose` | Print each open port as soon as it's found, not just in the final summary. Mutually exclusive with `-q` | `-v` |
 | `--udp` | Scan using UDP instead of TCP (see [UDP Scanning](#udp-scanning) above for what the results mean) | `--udp` |
-| `--ping-sweep` | Discover active hosts across a CIDR network range (e.g. `192.168.1.0/24`) using real ICMP pings, instead of scanning ports | `--ping-sweep` |
-| `--host-discovery` | Discover active hosts and scan each one's open ports | `--host-discovery` |
+| `--ping-sweep` | Discover active hosts across a CIDR network range (e.g. `192.168.1.0/24`) using real ICMP pings, instead of scanning ports. IPv4 only | `--ping-sweep` |
+| `--host-discovery` | Discover active hosts and scan each one's open ports. IPv4 only | `--host-discovery` |
 
 ### Examples
 
@@ -181,6 +217,7 @@ Scanning Ports: 100%|##########| 1024/1024 [00:11<00:00, 92.14port/s, open=2]
 ==================================================
 SCAN RESULTS FOR: 192.168.1.1
 PORTS SCANNED: 1024
+SCAN DURATION: 11.09s
 OPEN PORTS FOUND: 2
 
 Open ports:
