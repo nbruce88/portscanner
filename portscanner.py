@@ -429,6 +429,8 @@ Examples:
   python portscanner.py target.com --top-ports 100 --randomize
   python portscanner.py target.com -p 1-1000 -q
   python portscanner.py target.com -p 1-1000 -v
+  python portscanner.py host1.com,host2.com,192.168.1.5 -p 80,443
+  python portscanner.py --targets-file hosts.txt -p 1-1000
 
 To run this script:
 1. Save it as 'portscanner.py'
@@ -436,7 +438,8 @@ To run this script:
 3. Run with: python portscanner.py [arguments]
 
 Required arguments:
-  target              Target IP address or hostname to scan
+  target              Target IP address or hostname(s) to scan (comma-separated for
+                       multiple), required unless --targets-file is given
 
 Optional arguments:
   -p, --ports         Port range or specific ports (e.g., 80,443,22 or 1-1000)
@@ -444,6 +447,8 @@ Optional arguments:
   -t, --threads       Maximum number of concurrent threads (default: 100)
   --timeout           Connection timeout in seconds (default: 1.0)
   --save              Save results to file (JSON or CSV format)
+  --targets-file      File with one target per line (blank lines and lines
+                       starting with # are ignored)
   --randomize         Scan ports in random order instead of sequential
   -q, --quiet         Suppress progress bar and setup messages
   -v, --verbose       Print each open port as it's found during the scan
@@ -454,7 +459,9 @@ Note: This tool is intended for educational purposes and authorized security tes
     )
 
     # Add command line arguments
-    parser.add_argument("target", help="Target IP address or hostname to scan")
+    parser.add_argument("target", nargs="?",
+                       help="Target IP address or hostname(s) to scan (comma-separated for multiple)")
+    parser.add_argument("--targets-file", help="File with one target per line")
     port_group = parser.add_mutually_exclusive_group()
     port_group.add_argument("-p", "--ports",
                        help="Port range or specific ports (e.g., 80,443,22 or 1-1000)")
@@ -478,8 +485,14 @@ Note: This tool is intended for educational purposes and authorized security tes
     args = parser.parse_args()
 
     try:
+        if args.targets_file and (args.ping_sweep or args.host_discovery):
+            raise ValueError("--targets-file is not supported with --ping-sweep/--host-discovery; "
+                              "those take a single CIDR range as the target")
+
         # Check if ping sweep is requested
         if args.ping_sweep:
+            if not args.target:
+                raise ValueError("target (a CIDR range) is required for --ping-sweep")
             print(f"Performing ping sweep on {args.target}")
             scanner = PortScanner(args.target, [])
             active_hosts = scanner.ping_sweep(args.target)
@@ -490,6 +503,8 @@ Note: This tool is intended for educational purposes and authorized security tes
 
         # Check if host discovery is requested
         if args.host_discovery:
+            if not args.target:
+                raise ValueError("target (a CIDR range) is required for --host-discovery")
             print(f"Performing comprehensive host discovery on {args.target}")
             scanner = PortScanner(args.target, [])
             host_info = scanner.host_discovery(args.target)
@@ -549,37 +564,68 @@ Note: This tool is intended for educational purposes and authorized security tes
         if args.randomize:
             random.shuffle(ports)
 
-        # Resolve the target up front so a typo'd hostname fails fast instead of
-        # silently scanning nothing and reporting "no open ports found"
-        try:
-            socket.gethostbyname(args.target)
-        except socket.gaierror:
-            raise ValueError(f"Could not resolve target '{args.target}'")
+        # Build the list of targets to scan
+        targets = []
+        if args.target:
+            targets.extend(t.strip() for t in args.target.split(',') if t.strip())
+        if args.targets_file:
+            with open(args.targets_file) as f:
+                targets.extend(
+                    line.strip() for line in f
+                    if line.strip() and not line.strip().startswith('#')
+                )
+        targets = list(dict.fromkeys(targets))  # de-dup, preserve order
 
-        # Create scanner instance
-        scanner = PortScanner(args.target, ports)
-        scanner.timeout = args.timeout
-        scanner.verbose = args.verbose
-        scanner.quiet = args.quiet
+        if not targets:
+            raise ValueError("A target (or --targets-file) is required")
 
-        if not args.quiet:
-            print(f"Starting scan of {args.target} on {len(ports)} ports")
-            print(f"Using {args.threads} threads with {args.timeout}s timeout")
+        resolved_targets = []
+        for target in targets:
+            try:
+                socket.gethostbyname(target)
+                resolved_targets.append(target)
+            except socket.gaierror:
+                print(f"Skipping {target}: could not resolve")
 
-        # Perform the scan
-        open_ports = scanner.scan_ports_threaded(args.threads)
+        if not resolved_targets:
+            raise ValueError("No targets could be resolved")
 
-        # Print summary of results
-        scanner.print_summary()
+        total_open = 0
+        for target in resolved_targets:
+            scanner = PortScanner(target, ports)
+            scanner.timeout = args.timeout
+            scanner.verbose = args.verbose
+            scanner.quiet = args.quiet
 
-        # Save results if requested
-        if args.save:
-            # Determine format from filename extension
-            if args.save.endswith('.csv'):
-                scanner.save_results(args.save, 'csv')
-            else:
-                scanner.save_results(args.save, 'json')
-            print(f"Results saved to {args.save}")
+            if not args.quiet:
+                print(f"Starting scan of {target} on {len(ports)} ports")
+                print(f"Using {args.threads} threads with {args.timeout}s timeout")
+
+            # Perform the scan
+            scanner.scan_ports_threaded(args.threads)
+            total_open += len(scanner.open_ports)
+
+            # Print summary of results
+            scanner.print_summary()
+
+            # Save results if requested
+            if args.save:
+                if len(resolved_targets) > 1:
+                    safe_target = re.sub(r'[<>:"/\\|?*]', '_', target)
+                    base, ext = args.save.rsplit('.', 1) if '.' in args.save else (args.save, '')
+                    save_path = f"{base}_{safe_target}.{ext}" if ext else f"{base}_{safe_target}"
+                else:
+                    save_path = args.save
+
+                # Determine format from filename extension
+                if save_path.endswith('.csv'):
+                    scanner.save_results(save_path, 'csv')
+                else:
+                    scanner.save_results(save_path, 'json')
+                print(f"Results saved to {save_path}")
+
+        if len(targets) > 1:
+            print(f"\nScanned {len(resolved_targets)}/{len(targets)} target(s), {total_open} open port(s) total")
 
     except Exception as e:
         # Handle any errors during execution

@@ -2,13 +2,7 @@
 
 A simple port scanner that performs threaded port scanning with additional features like service identification and banner grabbing.
 
-\\\\\\
-              /\\/\\
- ___--~^~~--_(-  -)_--~~^~--___
- ^\\        Port Scanner           /^
-    \\   /\\   /\\    /\\   /\\   /
-      \\/   \\/  \\  /   \\/  \\/
-             ^\\/^
+
 
 ## Features
 
@@ -22,6 +16,7 @@ A simple port scanner that performs threaded port scanning with additional featu
 - **Top-ports presets** to scan a curated list of the most common ports instead of a range
 - **Randomized scan order** to avoid always hitting ports lowest-to-highest
 - **Quiet/verbose output modes** for scripting or live per-port detail
+- **Multiple targets** in one run, via a comma-separated list and/or a targets file
 - **Multiple output formats** (JSON and CSV)
 - **Command-line interface** with flexible options
 - **Color-coded output** for improved readability
@@ -84,18 +79,25 @@ python portscanner.py target.com -p 1-1000 -q
 
 # Verbose mode: print each open port as it's found
 python portscanner.py target.com -p 1-1000 -v
+
+# Scan multiple targets in one run
+python portscanner.py host1.com,host2.com,192.168.1.5 -p 80,443
+
+# Scan targets listed in a file (one per line, # comments allowed)
+python portscanner.py --targets-file hosts.txt -p 1-1000
 ```
 
 ### Command Line Arguments
 
 | Argument | Description | Example |
 |----------|-------------|---------|
-| `target` | Target IP address or hostname to scan | `192.168.1.1` |
+| `target` | Target IP address or hostname to scan; comma-separate for multiple. Required unless `--targets-file` is given | `192.168.1.1` or `host1.com,host2.com` |
+| `--targets-file` | File with one target per line (blank lines and `#` comments ignored); combines with `target` and de-duplicates. Not supported with `--ping-sweep`/`--host-discovery` | `--targets-file hosts.txt` |
 | `-p`, `--ports` | Port range or specific ports (e.g., 80,443,22 or 1-1000); scans exactly the ports given, not the range spanning them | `-p 80,443,22` |
 | `--top-ports` | Scan the N most common ports (a hand-curated list, not `-p`/range-based); mutually exclusive with `-p` | `--top-ports 100` |
 | `-t`, `--threads` | Maximum number of concurrent threads (default: 100) | `-t 200` |
 | `--timeout` | Connection timeout in seconds (default: 1.0) | `--timeout 2.0` |
-| `--save` | Save results to a file; format is inferred from the extension (`.json` or `.csv`) | `--save results.json` |
+| `--save` | Save results to a file; format is inferred from the extension (`.json` or `.csv`). With multiple targets, each host's results are saved to their own file (target name inserted before the extension, e.g. `results_192.168.1.1.json`) | `--save results.json` |
 | `--randomize` | Scan ports in random order instead of sequential | `--randomize` |
 | `-q`, `--quiet` | Suppress the progress bar and setup messages; the final summary still prints. Mutually exclusive with `-v` | `-q` |
 | `-v`, `--verbose` | Print each open port as soon as it's found, not just in the final summary. Mutually exclusive with `-q` | `-v` |
