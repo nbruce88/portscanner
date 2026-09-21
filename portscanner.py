@@ -51,6 +51,7 @@ class PortScanner:
         self.lock = threading.Lock()  # Thread synchronization lock
         self.timeout = 1.0  # Connection timeout in seconds
         self.retries = 1  # Extra attempts on a timeout before giving up on a port
+        self.protocol = 'tcp'
         self.verbose = False
         self.quiet = False
 
@@ -243,6 +244,70 @@ class PortScanner:
 
         return None
 
+    def scan_single_port_udp(self, port: int) -> Optional[Dict]:
+        """
+        Scan a single UDP port and collect detailed information about it.
+
+        UDP is connectionless, so unlike TCP there's no clean "port is open"
+        signal. Three outcomes are possible: the target sends a real response
+        (definitively open), the OS delivers an ICMP "port unreachable" back
+        to us on this connected socket (definitively closed, no retry needed),
+        or nothing comes back at all within the timeout (ambiguous - could be
+        an open service that ignores empty probes, or a firewall dropping the
+        packet silently - reported as 'open|filtered', matching nmap's own
+        terminology for this exact ambiguity).
+
+        Args:
+            port (int): Port number to scan
+
+        Returns:
+            dict or None: Port information dictionary if open or open|filtered,
+                None if a definitive ICMP refusal was received
+        """
+        attempts = self.retries + 1
+        for attempt in range(attempts):
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.settimeout(self.timeout)
+            status, banner = None, None
+            try:
+                sock.connect((self.target, port))
+                sock.send(b'')
+                data, _ = sock.recvfrom(1024)
+                status = 'open'
+                banner = data.decode('utf-8', errors='ignore').strip() or None
+            except socket.timeout:
+                if attempt < attempts - 1:
+                    continue
+                status = 'open|filtered'
+            except (ConnectionRefusedError, ConnectionResetError, OSError):
+                # ICMP port unreachable (or similar) - definitively closed
+                return None
+            finally:
+                sock.close()
+
+            service = self.get_service_name(port)
+            version = self.detect_version(service, banner) if banner else "Unknown"
+
+            port_info = {
+                'port': port,
+                'status': status,
+                'service': service,
+                'banner': banner,
+                'version': version,
+                'os_fingerprint': self.get_os_fingerprint(port)
+            }
+
+            with self.lock:
+                self.open_ports.append(port)
+                self.port_info[port] = port_info
+
+            if self.verbose:
+                tqdm.write(f"[+] Port {port} {status} - {service}")
+
+            return port_info
+
+        return None
+
     def scan_ports(self) -> List[int]:
         """
         Scan all ports in the specified range.
@@ -282,9 +347,10 @@ class PortScanner:
             List[int]: List of open port numbers
         """
         ports = self.ports
+        scan_fn = self.scan_single_port_udp if self.protocol == 'udp' else self.scan_single_port
 
         with ThreadPoolExecutor(max_workers=max_threads) as executor:
-            future_to_port = {executor.submit(self.scan_single_port, port): port for port in ports}
+            future_to_port = {executor.submit(scan_fn, port): port for port in ports}
 
             with tqdm(total=len(ports), desc="Scanning Ports", unit="port", disable=self.quiet) as pbar:
                 for future in as_completed(future_to_port):
@@ -339,7 +405,8 @@ class PortScanner:
                 service = info['service']
                 banner = info['banner']
                 version = info['version']
-                
+                status = info.get('status', 'open')
+
                 # Color code different services
                 if service == "SSH":
                     service_color = Fore.CYAN
@@ -351,9 +418,12 @@ class PortScanner:
                     service_color = Fore.BLUE
                 else:
                     service_color = Fore.WHITE
-                    
+
+                # Ambiguous UDP results (no confirmed response) get a visible marker
+                status_label = f" {Fore.MAGENTA}[{status}]{Style.RESET_ALL}" if status != 'open' else ""
+
                 # Print port information with banner and version
-                print(f"  {Fore.YELLOW}{port} ({service_color}{service}{Style.RESET_ALL})")
+                print(f"  {Fore.YELLOW}{port} ({service_color}{service}{Style.RESET_ALL}){status_label}")
                 if banner and banner != "No banner":
                     print(f"    Banner: {banner}")
                 if version and version != "Unknown":
@@ -442,7 +512,7 @@ def main():
             sys.exit(1)
 
         allowed_keys = {"ports", "top_ports", "port_file", "threads", "timeout",
-                         "retries", "save", "randomize", "quiet", "verbose"}
+                         "retries", "save", "randomize", "quiet", "verbose", "udp"}
         unknown = set(config_overrides) - allowed_keys
         if unknown:
             print(f"Error: unknown config option(s): {', '.join(sorted(unknown))}")
@@ -473,6 +543,7 @@ Examples:
   python portscanner.py --targets-file hosts.txt -p 1-1000
   python portscanner.py target.com --port-file myports.txt
   python portscanner.py target.com --config myconfig.json
+  python portscanner.py target.com -p 53,123,161 --udp
 
 To run this script:
 1. Save it as 'portscanner.py'
@@ -500,6 +571,11 @@ Optional arguments:
   --randomize         Scan ports in random order instead of sequential
   -q, --quiet         Suppress progress bar and setup messages
   -v, --verbose       Print each open port as it's found during the scan
+  --udp               Scan using UDP instead of TCP. UDP is connectionless, so
+                       a non-response is ambiguous ("open|filtered") rather
+                       than a confirmed open port, and scans are typically
+                       slower since most non-responding ports wait out the
+                       full timeout instead of returning instantly
   --ping-sweep        Perform ping sweep on network range
 
 Note: This tool is intended for educational purposes and authorized security testing only.
@@ -531,6 +607,8 @@ Note: This tool is intended for educational purposes and authorized security tes
                        help="Suppress progress bar and setup messages")
     verbosity_group.add_argument("-v", "--verbose", action="store_true",
                        help="Print each open port as it's found during the scan")
+    parser.add_argument("--udp", action="store_true",
+                       help="Scan using UDP instead of TCP (non-responses are ambiguous, see --help epilog)")
     parser.add_argument("--ping-sweep", action="store_true", help="Perform ping sweep on network range")
     parser.add_argument("--host-discovery", action="store_true", help="Perform comprehensive host discovery")
 
@@ -667,11 +745,13 @@ Note: This tool is intended for educational purposes and authorized security tes
             scanner = PortScanner(target, ports)
             scanner.timeout = args.timeout
             scanner.retries = args.retries
+            scanner.protocol = 'udp' if args.udp else 'tcp'
             scanner.verbose = args.verbose
             scanner.quiet = args.quiet
 
             if not args.quiet:
-                print(f"Starting scan of {target} on {len(ports)} ports")
+                protocol_label = " (UDP)" if args.udp else ""
+                print(f"Starting scan of {target} on {len(ports)} ports{protocol_label}")
                 print(f"Using {args.threads} threads with {args.timeout}s timeout")
 
             # Perform the scan
